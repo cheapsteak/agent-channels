@@ -1,0 +1,13 @@
+{
+  "name": "agent-channels",
+  "owner": {
+    "name": "Chang Wang"
+  },
+  "plugins": [
+    {
+      "name": "agent-channels",
+      "source": "./",
+      "description": "Slack-style channels for cross-session AI agent messaging"
+    }
+  ]
+}
