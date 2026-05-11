@@ -1,28 +1,8 @@
 {
   "name": "agent-channels",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Slack-style channels for cross-session AI agent messaging",
   "author": { "name": "Chang Wang" },
   "repository": "https://github.com/cheapsteak/agent-channels",
-  "license": "MIT",
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup",
-        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py" }]
-      },
-      {
-        "matcher": "resume",
-        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py" }]
-      },
-      {
-        "matcher": "clear",
-        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py" }]
-      },
-      {
-        "matcher": "compact",
-        "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py" }]
-      }
-    ]
-  }
+  "license": "MIT"
 }

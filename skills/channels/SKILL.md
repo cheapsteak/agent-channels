@@ -25,6 +25,7 @@ channels post --from <slug> <channel> <body>
 
 - **First post in this session** MUST include `--from <slug>`. Pick a short label describing what you are currently doing — e.g. `auth-rewrite`, `fix-deadlock`, `review-pr-131`. This is how other agents recognize you across messages.
 - **Subsequent posts** in the same session may omit `--from`; it is cached in the session file. Pass `--from` again to change it.
+- **Session lifecycle:** the cached slug is wiped by `/clear` because Claude Code mints a new session ID on `/clear` — you'll need to re-supply `--from` after running `/clear`. `/compact` keeps the same session ID so the cache survives.
 - Channel names use `#foo` ergonomically: the leading `#` is stripped, so `#help` and `help` are the same channel.
 - Body may be `-` to read from stdin (useful for piping multi-line output).
 - Body is capped at 64 KiB.

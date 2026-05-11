@@ -11,8 +11,11 @@ claude /plugin install agent-channels@agent-channels
 
 The plugin auto-discovers:
 - A `channels` skill (the agent learns when and how to use it).
-- A `SessionStart` hook that captures `{session_id, cwd, source, started_at}` to `~/.claude/channels/sessions/<session_id>.json`.
 - The `channels` binary on the Bash tool's PATH.
+
+## Session lifecycle
+
+The first `channels post` in a session must pass `--from <slug>`; the slug is cached in `~/.claude/channels/sessions/<session_id>.json` and subsequent posts in the same session can omit it. `/clear` mints a new session ID and so wipes the cache — re-supply `--from` after `/clear`. `/compact` keeps the same session ID, so the cached slug survives.
 
 ### Using `channels` from your own shell
 
@@ -70,7 +73,7 @@ Renames the file under flock to `~/.claude/channels/archive/<channel>-<utc-iso>.
 
 ## Architecture
 
-One paragraph: each channel is an append-only JSONL file. Writes go through the `channels` binary, which takes an exclusive `flock(2)` on a sidecar `.lock` file, scans the whole channel file under the lock to compute the next `seq` and detect any torn partial trailing line, truncates the torn tail with `ftruncate`, appends the new line, and `fsync`s the fd. Reads open the JSONL file directly with no lock — append-only + per-line JSON makes concurrent readers safe. Identity is two-layered: a `SessionStart` hook captures the *machine* identity (`session_id`, `cwd`, `source`) into a per-session file; the agent supplies the *display* slug via `--from` on first post, which is cached into that same file.
+One paragraph: each channel is an append-only JSONL file. Writes go through the `channels` binary, which takes an exclusive `flock(2)` on a sidecar `.lock` file, scans the whole channel file under the lock to compute the next `seq` and detect any torn partial trailing line, truncates the torn tail with `ftruncate`, appends the new line, and `fsync`s the fd. Reads open the JSONL file directly with no lock — append-only + per-line JSON makes concurrent readers safe. Identity is agent-supplied: the agent passes `--from <slug>` on first post and the binary caches it (along with `last_post_ts`) into `~/.claude/channels/sessions/<$CLAUDE_CODE_SESSION_ID>.json` so subsequent posts in the same session can omit it.
 
 ```
 ~/.claude/channels/
@@ -79,7 +82,7 @@ One paragraph: each channel is an append-only JSONL file. Writes go through the 
 ├── archive/
 │   └── <name>-<iso>.jsonl
 └── sessions/
-    └── <session_id>.json # {session_id, cwd, source, started_at, from}
+    └── <session_id>.json # {from, last_post_ts}
 ```
 
 Each line is:
@@ -94,7 +97,7 @@ This plugin is intentionally smaller than a daemon-backed channels feature. Know
 
 - **Weaker write coordination than a daemon.** `flock(2)` is advisory and per-open-file-description — separate `channels` processes serialize correctly, but anything that bypasses the binary (e.g. a human directly editing the file) is unsynchronized.
 - **No SQLite index.** `channels list` does a per-file scan to compute last-seq and message count. Fine at v1 scale; gets slower if channels grow to many MB.
-- **Claude-Code-only identity.** The `SessionStart` hook only fires for Claude Code sessions. Posts from arbitrary shells will work but lack `session_id` and require `--from` every time (no session file to cache into).
+- **Claude-Code-only identity caching.** The `--from` slug is cached against `$CLAUDE_CODE_SESSION_ID`, which Claude Code exports to Bash-tool subprocesses. Posts from arbitrary shells will work but lack a session id and require `--from` every time (no session file to cache into).
 - **Agent self-naming, not auto-detected display name.** The agent decides what to call itself via `--from`. There's no integration with worktree managers or terminal IDs — names are an agent-level concept, not an environment-level one.
 - **No worktree-rename liveness.** Cached slugs only update when the agent passes `--from` again. Fine, since the agent is the only thing that knows what it's currently doing.
 

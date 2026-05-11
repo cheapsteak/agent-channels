@@ -9,7 +9,7 @@ TMP="$(mktemp -d -t agent-channels-smoke.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 export HOME="$TMP"
-export CLAUDE_SESSION_ID="test-session-$$"
+export CLAUDE_CODE_SESSION_ID="test-uuid-12345"
 
 fail() {
     echo "FAIL: $*" >&2
@@ -20,12 +20,27 @@ step() {
     echo "--- $*"
 }
 
+step "no session file exists before first post (lazy-init)"
+test ! -e "$HOME/.claude/channels/sessions/test-uuid-12345.json" \
+    || fail "session file should not exist before first post"
+
 step "post #1 (requires --from)"
 out="$("$CHANNELS" post --from smoke-test '#help' 'first message' 2>&1)" \
     || fail "post #1 errored: $out"
 echo "$out" | grep -q '^help #1' || fail "post #1 unexpected output: $out"
 
-step "post #2 (slug should be cached, no --from needed)"
+step "lazy-init created session file with {from, last_post_ts}"
+sess="$HOME/.claude/channels/sessions/test-uuid-12345.json"
+test -f "$sess" || fail "session file was not created by lazy-init: $sess"
+python3 -c "
+import json, sys
+d = json.load(open('$sess'))
+assert d.get('from') == 'smoke-test', d
+assert isinstance(d.get('last_post_ts'), str) and d['last_post_ts'], d
+assert 'cwd' not in d and 'source' not in d and 'started_at' not in d, d
+" || fail "session file shape wrong: $(cat "$sess")"
+
+step "post #2 (slug should be cached from session file, no --from needed)"
 out="$("$CHANNELS" post help 'second message' 2>&1)" \
     || fail "post #2 errored: $out"
 echo "$out" | grep -q '^help #2' || fail "post #2 unexpected output: $out"
@@ -93,7 +108,7 @@ out="$("$CHANNELS" read help --limit 5)"
 echo "$out" | grep -q 'with hash' || fail "#help did not write to 'help'"
 
 step "first post without --from errors"
-unset CLAUDE_SESSION_ID
+unset CLAUDE_CODE_SESSION_ID
 if "$CHANNELS" post anonymous 'no slug' 2>/dev/null; then
     fail "post without --from or cached slug should error"
 fi

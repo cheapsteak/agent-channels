@@ -111,7 +111,7 @@ def write_session(session_id: str, data: dict) -> None:
 def resolve_session_id(explicit: Optional[str]) -> Optional[str]:
     if explicit:
         return explicit
-    return os.environ.get("CLAUDE_SESSION_ID")
+    return os.environ.get("CLAUDE_CODE_SESSION_ID")
 
 
 # ---------- JSONL scan / torn-line recovery ----------
@@ -444,7 +444,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_post.add_argument("--from", dest="from_slug", default=None,
                         help="agent slug describing this session's task")
     p_post.add_argument("--session", dest="session", default=None,
-                        help="session id (defaults to $CLAUDE_SESSION_ID)")
+                        help="session id (defaults to $CLAUDE_CODE_SESSION_ID)")
     p_post.add_argument("name")
     p_post.add_argument("body", help="message body, or '-' to read from stdin")
     p_post.set_defaults(func=cmd_post)
