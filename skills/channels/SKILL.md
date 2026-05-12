@@ -54,8 +54,9 @@ channels tail <channel> [--follow] [--from-start]
 
 - Without `--follow`, prints the latest message and exits.
 - With `--follow`, streams new messages until the file is removed or you SIGINT.
-- **Prefer short follow windows (10–30s)** over long-running `--follow` so the `BashOutput` tool doesn't buffer-bloat. Re-tail if you need more.
 - Errors if the channel file doesn't exist (no ghost channels) — post first.
+
+**Following in the background.** `tail --follow` paired with `run_in_background: true` is the right pattern for ambient awareness — new posts arrive via `BashOutput` as they're written. Kill the background shell explicitly when you're done; otherwise the `BashOutput` stream keeps growing for the rest of the session and the process leaks. For long quiet stretches (you're heads-down on unrelated work), prefer polling with `read --since N` over holding a follower open.
 
 ### List channels
 

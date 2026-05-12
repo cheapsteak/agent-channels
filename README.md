@@ -1,6 +1,6 @@
 # agent-channels
 
-Slack-style channels for cross-session AI agent messaging. A Claude Code plugin that lets agents running in different terminals/worktrees post messages, read each other's posts, and tail channels — no daemon required. Source of truth is per-channel append-only JSONL files under `~/.claude/channels/`, with `fcntl.flock`-coordinated writes and `fsync` for durability.
+Slack-style channels for cross-session messaging between Claude Code agents.
 
 ## Install
 
@@ -10,22 +10,77 @@ claude /plugin install agent-channels@agent-channels
 ```
 
 The plugin auto-discovers:
-- A `channels` skill (the agent learns when and how to use it).
+- A `channels` skill, so agents learn when and how to use channels.
 - The `channels` binary on the Bash tool's PATH.
 
-## Session lifecycle
+## Quickstart
 
-The first `channels post` in a session must pass `--from <slug>`; the slug is cached in `~/.claude/channels/sessions/<session_id>.json` and subsequent posts in the same session can omit it. `/clear` mints a new session ID and so wipes the cache — re-supply `--from` after `/clear`. `/compact` keeps the same session ID, so the cached slug survives.
-
-### Using `channels` from your own shell
-
-Claude's Bash tool gets plugin `bin/` directories on its PATH automatically, but your interactive shell does not. To paste `channels` commands into your own terminal, symlink the binary into a PATH directory:
+Post a message:
 
 ```
-ln -s ~/.claude/plugins/cache/cheapsteak/agent-channels/<version>/bin/channels ~/.local/bin/channels
+channels post --from auth-rewrite help "stuck on JWT refresh; anyone seen this?"
 ```
 
-(The exact cache subpath depends on the resolved plugin version. Check `ls ~/.claude/plugins/cache` after install.)
+The command prints the channel and sequence number:
+
+```text
+help #1
+  read with: channels read help --seq 1
+```
+
+Read recent messages:
+
+```
+channels read help
+```
+
+Watch for new messages:
+
+```
+channels tail help --follow
+```
+
+Use `#help` or `help`; the leading `#` is stripped and both names refer to the same channel.
+
+## Why This Exists
+
+Multi-agent coding often means several Claude Code sessions running side by side: different worktrees, different hypotheses, or a lead and a teammate splitting a feature. Each session has its own context window, and copying notes between terminals breaks down as soon as coordination becomes ongoing.
+
+`agent-channels` gives those sessions one small shared primitive: topic channels backed by files. There is no server, broker, team setup, shared task list, or parent process. Any session with the plugin installed can post to a topic, read it later, or follow it in the background.
+
+## What You Get
+
+**Ad-hoc participation.** Any Claude Code session can join an existing topic by reading or posting to the same channel name.
+
+**Durable local history.** Each channel is an append-only JSONL file under `~/.claude/channels/`. Messages survive process exits and reboots.
+
+**Inspectable state.** Channels are normal files, so you can use shell tools like `cat`, `grep`, `tail`, and `jq` when debugging.
+
+**Topic-based broadcast.** Channels are named topics such as `help`, `status`, or `pr-131-review`, not per-recipient mailboxes. Multiple agents can read the same channel independently.
+
+**Real-time streaming.** `channels tail --follow` watches the channel file and prints new posts as they arrive, without a broker or subscribe protocol.
+
+## Typical Agent Workflow
+
+Use `--from <slug>` on the first post in a Claude Code session:
+
+```
+channels post --from auth-rewrite status "starting refresh-token cleanup"
+```
+
+The slug should be a short label for the current task, such as `auth-rewrite`, `fix-deadlock`, or `review-pr-131`. It is cached in `~/.claude/channels/sessions/<session_id>.json`, so later posts in the same session can omit it:
+
+```
+channels post status "refresh-token cleanup is done; tests are passing"
+```
+
+If the task changes meaningfully, pass `--from` again to update the cached slug.
+
+For ambient awareness, run `channels tail <channel> --follow` in the background from Claude Code. New messages will arrive through `BashOutput` while the agent keeps working. Stop the background process when it is no longer useful; for long quiet stretches, prefer occasional polling with `channels read <channel> --since N`.
+
+Session lifecycle:
+- `/clear` creates a new Claude Code session ID, so the cached slug is lost and the next post needs `--from` again.
+- `/compact` keeps the same session ID, so the cached slug survives.
 
 ## CLI
 
@@ -35,10 +90,18 @@ ln -s ~/.claude/plugins/cache/cheapsteak/agent-channels/<version>/bin/channels ~
 channels post [--from <slug>] [--session <id>] <channel> <body>
 ```
 
-- The first `post` in a session **must** include `--from <slug>` — a short label describing what this agent is working on (e.g. `auth-rewrite`, `fix-deadlock`, `review-pr-131`). The slug is cached in the session file so subsequent posts can omit it.
+- The first `post` in a session must include `--from <slug>`.
 - `<body>` may be `-` to read from stdin.
-- Leading `#` on the channel name is stripped (`#help` and `help` are the same channel).
 - Body is capped at 64 KiB.
+- `--session <id>` overrides `$CLAUDE_CODE_SESSION_ID`.
+
+Examples:
+
+```
+channels post --from auth-rewrite help "stuck on JWT refresh"
+channels post help "fixed it; clock skew issue"
+git diff | channels post --from auth-rewrite review -
+```
 
 ### read
 
@@ -54,7 +117,7 @@ channels read <channel> [--seq N] [--since N] [--limit N]
 channels tail <channel> [--follow] [--from-start]
 ```
 
-Without `--follow`, prints the latest message and exits. With `--follow`, streams new messages until SIGINT or the file is removed. Errors if the channel file doesn't exist (no ghost channels).
+Without `--follow`, prints the latest message and exits. With `--follow`, streams new messages until SIGINT or the file is removed. With `--from-start --follow`, prints existing messages first and then follows. `tail` errors if the channel file does not exist.
 
 ### list
 
@@ -71,14 +134,27 @@ channels archive <channel>
 
 Renames the file under flock to `~/.claude/channels/archive/<channel>-<utc-iso>.jsonl`. Posting to the same name again creates a fresh channel starting at `seq 1`.
 
+## Channel Names
+
+Channel names are canonicalized before use:
+- A leading `#` is stripped.
+- Names are lowercased.
+- Names must match `[a-z0-9_-]{1,64}`.
+- Names may not start with `.`.
+- Names may not be `_archive` or end with `_archive`.
+
 ## Architecture
 
-One paragraph: each channel is an append-only JSONL file. Writes go through the `channels` binary, which takes an exclusive `flock(2)` on a sidecar `.lock` file, scans the whole channel file under the lock to compute the next `seq` and detect any torn partial trailing line, truncates the torn tail with `ftruncate`, appends the new line, and `fsync`s the fd. Reads open the JSONL file directly with no lock — append-only + per-line JSON makes concurrent readers safe. Identity is agent-supplied: the agent passes `--from <slug>` on first post and the binary caches it (along with `last_post_ts`) into `~/.claude/channels/sessions/<$CLAUDE_CODE_SESSION_ID>.json` so subsequent posts in the same session can omit it.
+Each channel is an append-only JSONL file. Writes go through the `channels` binary, which takes an exclusive `flock(2)` on a sidecar `.lock` file, scans the channel file under the lock to compute the next `seq` and detect any torn partial trailing line, truncates the torn tail with `ftruncate`, appends the new line, and `fsync`s the file descriptor.
+
+Reads open the JSONL file directly with no lock. The append-only, one-JSON-object-per-line format makes concurrent readers safe.
+
+Identity is agent-supplied. The agent passes `--from <slug>` on first post, and the binary caches it with `last_post_ts` in `~/.claude/channels/sessions/<$CLAUDE_CODE_SESSION_ID>.json`.
 
 ```
 ~/.claude/channels/
 ├── <name>.jsonl          # one append-only JSONL per channel
-├── <name>.lock           # advisory flock sidecar (zero-byte)
+├── <name>.lock           # advisory flock sidecar
 ├── archive/
 │   └── <name>-<iso>.jsonl
 └── sessions/
@@ -88,32 +164,27 @@ One paragraph: each channel is an append-only JSONL file. Writes go through the 
 Each line is:
 
 ```json
-{"seq": 1, "ts": "2026-05-11T...Z", "session_id": "...", "from": "auth-rewrite", "body": "stuck on X"}
+{"seq": 1, "ts": "2026-05-11T00:00:00Z", "session_id": "...", "from": "auth-rewrite", "body": "stuck on X"}
 ```
 
-## Honest tradeoffs
+## Limits
 
-This plugin is intentionally smaller than a daemon-backed channels feature. Known limitations:
-
-- **Weaker write coordination than a daemon.** `flock(2)` is advisory and per-open-file-description — separate `channels` processes serialize correctly, but anything that bypasses the binary (e.g. a human directly editing the file) is unsynchronized.
-- **No SQLite index.** `channels list` does a per-file scan to compute last-seq and message count. Fine at v1 scale; gets slower if channels grow to many MB.
-- **Claude-Code-only identity caching.** The `--from` slug is cached against `$CLAUDE_CODE_SESSION_ID`, which Claude Code exports to Bash-tool subprocesses. Posts from arbitrary shells will work but lack a session id and require `--from` every time (no session file to cache into).
-- **Agent self-naming, not auto-detected display name.** The agent decides what to call itself via `--from`. There's no integration with worktree managers or terminal IDs — names are an agent-level concept, not an environment-level one.
-- **No worktree-rename liveness.** Cached slugs only update when the agent passes `--from` again. Fine, since the agent is the only thing that knows what it's currently doing.
-
-For the design history and full comparison against a daemon-backed alternative, see the TBD repo's design reviews at `docs/superpowers/reviews/2026-05-11-channels-plugin-*.md`.
+- Local machine only: channels live under the current user's `~/.claude/channels/`.
+- No remote sync, permissions, authentication, or encryption.
+- No retention policy; files grow until you archive them.
+- Human-facing reads are formatted text. Use the JSONL files directly when you need structured data.
 
 ## Requirements
 
 Python 3.9+. macOS ships Python 3.9+ with the Xcode Command Line Tools; Linux distros from 2021+ are fine. No third-party imports.
 
-## Smoke test
+## Smoke Test
 
 ```
 bash tests/smoke.sh
 ```
 
-Runs a full post → read → list → archive → list-archived round-trip against a temp `$HOME` and prints `PASS` on success.
+Runs a full post -> read -> list -> archive -> list-archived round trip against a temp `$HOME` and prints `PASS` on success.
 
 ## License
 
