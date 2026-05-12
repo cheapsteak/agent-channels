@@ -6,9 +6,18 @@ Slack-style channels for cross-session messaging between Claude Code agents.
 
 ### As a Claude Code plugin (primary)
 
+From your shell (uses Claude Code's `plugin` subcommand — no leading slash):
+
 ```
-claude /plugin marketplace add cheapsteak/agent-channels
-claude /plugin install agent-channels@agent-channels
+claude plugin marketplace add cheapsteak/agent-channels
+claude plugin install agent-channels@agent-channels
+```
+
+Or, from inside a running Claude Code session (slash commands):
+
+```
+/plugin marketplace add cheapsteak/agent-channels
+/plugin install agent-channels@agent-channels
 ```
 
 This installs:
