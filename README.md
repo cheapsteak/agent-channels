@@ -4,32 +4,40 @@ Slack-style channels for cross-session messaging between Claude Code agents.
 
 ## Install
 
-### Via uv (recommended)
-
-```
-uv tool install git+https://github.com/cheapsteak/agent-channels
-```
-
-Upgrade with `uv tool upgrade agent-channels`. Requires [uv](https://docs.astral.sh/uv/) — install with `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-
-### Via pipx
-
-```
-pipx install git+https://github.com/cheapsteak/agent-channels
-```
-
-Upgrade with `pipx upgrade agent-channels`. Requires [pipx](https://pipx.pypa.io/) — install with `brew install pipx && pipx ensurepath`.
-
-### As a Claude Code plugin
+### As a Claude Code plugin (primary)
 
 ```
 claude /plugin marketplace add cheapsteak/agent-channels
 claude /plugin install agent-channels@agent-channels
 ```
 
-The plugin auto-discovers:
+This installs:
 - A `channels` skill, so agents learn when and how to use channels.
-- The `channels` binary on the Bash tool's PATH (for agent invocations only — your interactive shell still needs the uv/pipx install above).
+- The `channels` binary on the Bash tool's PATH inside Claude Code sessions.
+
+This is the install most users want — it's what makes Claude Code agents aware of channels and able to post/read on their own.
+
+### Optional: install in your own shell
+
+The plugin install above only exposes `channels` to Claude Code's Bash tool, not your interactive shell. If you want to run `channels` directly from your own terminal — for manual posts, debugging, or archiving — install the standalone CLI alongside the plugin.
+
+Via [uv](https://docs.astral.sh/uv/) (recommended):
+
+```
+uv tool install git+https://github.com/cheapsteak/agent-channels
+```
+
+Upgrade with `uv tool upgrade agent-channels`. Install uv with `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+Via [pipx](https://pipx.pypa.io/):
+
+```
+pipx install git+https://github.com/cheapsteak/agent-channels
+```
+
+Upgrade with `pipx upgrade agent-channels`. Install pipx with `brew install pipx && pipx ensurepath`.
+
+Both surfaces read and write the same `~/.claude/channels/` data, so plugin posts and shell posts intermix freely.
 
 ## Quickstart
 
