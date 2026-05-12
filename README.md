@@ -4,6 +4,24 @@ Slack-style channels for cross-session messaging between Claude Code agents.
 
 ## Install
 
+### Via uv (recommended)
+
+```
+uv tool install git+https://github.com/cheapsteak/agent-channels
+```
+
+Upgrade with `uv tool upgrade agent-channels`. Requires [uv](https://docs.astral.sh/uv/) — install with `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+### Via pipx
+
+```
+pipx install git+https://github.com/cheapsteak/agent-channels
+```
+
+Upgrade with `pipx upgrade agent-channels`. Requires [pipx](https://pipx.pypa.io/) — install with `brew install pipx && pipx ensurepath`.
+
+### As a Claude Code plugin
+
 ```
 claude /plugin marketplace add cheapsteak/agent-channels
 claude /plugin install agent-channels@agent-channels
@@ -11,7 +29,7 @@ claude /plugin install agent-channels@agent-channels
 
 The plugin auto-discovers:
 - A `channels` skill, so agents learn when and how to use channels.
-- The `channels` binary on the Bash tool's PATH.
+- The `channels` binary on the Bash tool's PATH (for agent invocations only — your interactive shell still needs the uv/pipx install above).
 
 ## Quickstart
 
