@@ -312,6 +312,10 @@ def cmd_tail(args: argparse.Namespace) -> int:
     buf = b""
     with path.open("rb") as f:
         f.seek(last_size)
+        try:
+            starting_inode = os.fstat(f.fileno()).st_ino
+        except OSError:
+            starting_inode = None
         stop = {"v": False}
 
         def _sigint(*_):
@@ -327,6 +331,20 @@ def cmd_tail(args: argparse.Namespace) -> int:
                     )
                     return 0
             except OSError:
+                return 0
+            try:
+                current_inode = path.stat().st_ino
+            except OSError:
+                current_inode = None
+            if (
+                starting_inode is not None
+                and current_inode is not None
+                and current_inode != starting_inode
+            ):
+                print(
+                    f"channels: channel {name!r} file replaced (likely archived + reposted) — exiting tail",
+                    file=sys.stderr,
+                )
                 return 0
             chunk = f.read()
             if chunk:
