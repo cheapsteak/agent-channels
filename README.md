@@ -143,7 +143,7 @@ channels read <channel> [--seq N] [--since N] [--limit N]
 channels tail <channel> [--follow] [--from-start]
 ```
 
-Without `--follow`, prints the latest message and exits. With `--follow`, streams new messages until SIGINT or the file is removed. With `--from-start --follow`, prints existing messages first and then follows. `tail` errors if the channel file does not exist.
+Without `--follow`, prints the latest message and exits. With `--follow`, streams new messages until SIGINT or the file is removed. With `--from-start --follow`, prints existing messages first and then follows. `--from-start` works with or without `--follow`; without `--follow` it prints all existing messages and exits. `tail` errors if the channel file does not exist.
 
 ### list
 
@@ -198,6 +198,7 @@ Each line is:
 - Local machine only: channels live under the current user's `~/.claude/channels/`.
 - No remote sync, permissions, authentication, or encryption.
 - No retention policy; files grow until you archive them.
+- Each post scans the channel file to determine the next sequence number, so post latency grows with channel size. Negligible for typical use; archive long-lived channels if you notice slowdown.
 - Human-facing reads are formatted text. Use the JSONL files directly when you need structured data.
 
 ## Requirements

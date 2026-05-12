@@ -9,7 +9,6 @@ Reads open files directly.
 from __future__ import annotations
 
 import argparse
-import errno
 import fcntl
 import json
 import os
@@ -48,7 +47,7 @@ def canonical_name(raw: str) -> str:
     name = raw[1:] if raw.startswith("#") else raw
     name = name.lower()
     if not name:
-        die("channel name is empty")
+        die(f"channel name is empty: {raw!r}")
     if name.startswith("."):
         die(f"channel name may not start with '.': {raw!r}")
     if name == RESERVED_SUFFIX or name.endswith(RESERVED_SUFFIX):
@@ -439,11 +438,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
         finally:
-            try:
-                os.close(lock_fd)
-            except OSError as e:
-                if e.errno != errno.EBADF:
-                    raise
+            os.close(lock_fd)
 
 
 # ---------- argparse ----------
