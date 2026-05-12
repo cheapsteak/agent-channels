@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-channels"
+version = "0.3.0"
+description = "Slack-style channels for cross-session messaging between Claude Code agents"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Chang Wang" }]
+keywords = ["claude-code", "agent", "messaging", "channels"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Topic :: Communications",
+]
+
+[project.urls]
+Homepage = "https://github.com/cheapsteak/agent-channels"
+Repository = "https://github.com/cheapsteak/agent-channels"
+
+[project.scripts]
+channels = "agent_channels:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
