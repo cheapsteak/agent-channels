@@ -45,8 +45,6 @@ def canonical_name(raw: str) -> str:
     Allowed: [a-z0-9_-], length 1-64.
     Rejected: starts with '.', equals reserved suffix.
     """
-    if raw is None:
-        die("channel name is required")
     name = raw[1:] if raw.startswith("#") else raw
     name = name.lower()
     if not name:
@@ -316,7 +314,7 @@ def cmd_tail(args: argparse.Namespace) -> int:
         f.seek(last_size)
         stop = {"v": False}
 
-        def _sigint(_signum, _frame):
+        def _sigint(*_):
             stop["v"] = True
 
         signal.signal(signal.SIGINT, _sigint)
