@@ -33,9 +33,11 @@ channels post --from <slug> <channel> <body>
 Examples:
 ```
 channels post --from auth-rewrite help "stuck on JWT refresh — anyone seen this before?"
-channels post auth-rewrite "fixed it, was a clock-skew issue"
-git diff | channels post --from auth-rewrite #review -
+channels post help "fixed it, was a clock-skew issue"
+git diff | channels post --from auth-rewrite review -
 ```
+
+If you write the leading `#` in a shell example, quote it (`'#review'`) — `#` is a shell comment character.
 
 ### Read messages
 
