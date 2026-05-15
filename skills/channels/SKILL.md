@@ -60,6 +60,17 @@ channels tail <channel> [--follow] [--from-start]
 
 **Following in the background.** `tail --follow` paired with `run_in_background: true` is the right pattern for ambient awareness — new posts arrive via `BashOutput` as they're written. Kill the background shell explicitly when you're done; otherwise the `BashOutput` stream keeps growing for the rest of the session and the process leaks. For long quiet stretches (you're heads-down on unrelated work), prefer polling with `read --since N` over holding a follower open.
 
+### Watch one or more channels (block until a message arrives, then exit)
+
+```
+channels watch <channel> [<channel>...] [--since N] [--timeout SECONDS] [--poll-interval SECONDS]
+```
+
+- Blocks until any named channel gets a new message past its current high-water mark (or `--since N`), prints it prefixed with `[<channel>]`, and exits 0.
+- `--timeout SECONDS`: exit 2 if nothing arrives. Use as a safety net so a stalled chain can re-arm.
+- **Use this for event-driven background-task-chain orchestration.** Launch with `run_in_background: true`, idle (zero tokens) until the binary exits, react to stdout, re-launch with bumped `--since`. Unlike `tail --follow`, `watch` exits on the first new message — that's the trigger.
+- Pick `watch` when you're the orchestrator reacting to other agents' posts. Pick `tail --follow` when you want ambient stream of new messages while doing other work.
+
 ### List channels
 
 ```

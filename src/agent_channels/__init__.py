@@ -31,12 +31,14 @@ RESERVED_SUFFIX = "_archive"
 
 # ---------- errors / exits ----------
 
+
 def die(msg: str, code: int = 1) -> None:
     print(f"channels: {msg}", file=sys.stderr)
     sys.exit(code)
 
 
 # ---------- channel name ----------
+
 
 def canonical_name(raw: str) -> str:
     """Strip leading '#', case-fold to lowercase, validate.
@@ -70,6 +72,7 @@ def lock_path(name: str) -> Path:
 
 # ---------- filesystem helpers ----------
 
+
 def ensure_dirs() -> None:
     CHANNELS_ROOT.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -81,6 +84,7 @@ def now_iso() -> str:
 
 
 # ---------- session / identity ----------
+
 
 def session_file(session_id: str) -> Path:
     return SESSIONS_DIR / f"{session_id}.json"
@@ -111,6 +115,7 @@ def resolve_session_id(explicit: Optional[str]) -> Optional[str]:
 
 
 # ---------- JSONL scan / torn-line recovery ----------
+
 
 def scan_last_good(fd: int) -> tuple[int, int]:
     """Scan the entire file. Return (last_good_end, highest_seq).
@@ -153,6 +158,7 @@ def scan_last_good(fd: int) -> tuple[int, int]:
 
 # ---------- POST ----------
 
+
 def cmd_post(args: argparse.Namespace) -> int:
     name = canonical_name(args.name)
 
@@ -163,9 +169,7 @@ def cmd_post(args: argparse.Namespace) -> int:
         die("body is required")
     body_bytes = body.encode("utf-8")
     if len(body_bytes) > MAX_BODY_BYTES:
-        die(
-            f"body too large: {len(body_bytes)} bytes (max {MAX_BODY_BYTES})"
-        )
+        die(f"body too large: {len(body_bytes)} bytes (max {MAX_BODY_BYTES})")
 
     session_id = resolve_session_id(args.session)
 
@@ -193,9 +197,7 @@ def cmd_post(args: argparse.Namespace) -> int:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
         cp = channel_path(name)
-        data_fd = os.open(
-            str(cp), os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644
-        )
+        data_fd = os.open(str(cp), os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             last_good_end, highest_seq = scan_last_good(data_fd)
             if last_good_end != os.fstat(data_fd).st_size:
@@ -232,6 +234,7 @@ def cmd_post(args: argparse.Namespace) -> int:
 
 # ---------- READ helpers ----------
 
+
 def iter_messages(path: Path) -> Iterator[dict]:
     try:
         with path.open("r", encoding="utf-8") as f:
@@ -256,6 +259,7 @@ def format_message(m: dict) -> str:
 
 
 # ---------- READ ----------
+
 
 def cmd_read(args: argparse.Namespace) -> int:
     if args.seq is not None and args.since is not None:
@@ -285,6 +289,7 @@ def cmd_read(args: argparse.Namespace) -> int:
 
 
 # ---------- TAIL ----------
+
 
 def cmd_tail(args: argparse.Namespace) -> int:
     name = canonical_name(args.name)
@@ -366,7 +371,82 @@ def cmd_tail(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- WATCH ----------
+
+
+def _highest_seq(path: Path) -> int:
+    high = 0
+    for m in iter_messages(path):
+        seq = m.get("seq")
+        if isinstance(seq, int) and seq > high:
+            high = seq
+    return high
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Block until a new message arrives on any named channel, then exit.
+
+    Designed for the background-task-chain pattern: launch with the agent's
+    background tool, idle (zero tokens) until the binary exits, react to
+    stdout, re-launch with bumped --since. Unlike `tail --follow`, this
+    exits on the first new message — that's the trigger.
+    """
+    names = [canonical_name(n) for n in args.names]
+    if not names:
+        die("at least one channel name required")
+
+    poll_interval = max(0.05, args.poll_interval)
+    deadline: Optional[float] = (
+        time.monotonic() + args.timeout if args.timeout and args.timeout > 0 else None
+    )
+
+    baselines: dict[str, int] = {}
+    for name in names:
+        if args.since is not None:
+            baselines[name] = args.since
+        else:
+            path = channel_path(name)
+            baselines[name] = _highest_seq(path) if path.exists() else 0
+
+    stop = {"v": False}
+
+    def _sigint(_signum, _frame):
+        stop["v"] = True
+
+    signal.signal(signal.SIGINT, _sigint)
+
+    while not stop["v"]:
+        new_msgs: list[tuple[str, dict]] = []
+        for name in names:
+            path = channel_path(name)
+            if not path.exists():
+                continue
+            for m in iter_messages(path):
+                seq = m.get("seq")
+                if isinstance(seq, int) and seq > baselines[name]:
+                    new_msgs.append((name, m))
+
+        if new_msgs:
+            new_msgs.sort(key=lambda nm: (nm[1].get("ts", ""), nm[1].get("seq", 0)))
+            for name, m in new_msgs:
+                seq = m.get("seq", "?")
+                ts = m.get("ts", "")
+                frm = m.get("from", "?")
+                body = m.get("body", "")
+                print(f"[{name}] #{seq} [{ts}] {frm}: {body}", flush=True)
+            return 0
+
+        if deadline is not None and time.monotonic() >= deadline:
+            print("channels: watch timeout", file=sys.stderr)
+            return 2
+
+        time.sleep(poll_interval)
+
+    return 130
+
+
 # ---------- LIST ----------
+
 
 def cmd_list(args: argparse.Namespace) -> int:
     ensure_dirs()
@@ -409,6 +489,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 # ---------- ARCHIVE ----------
 
+
 def cmd_archive(args: argparse.Namespace) -> int:
     name = canonical_name(args.name)
     ensure_dirs()
@@ -443,6 +524,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
 # ---------- argparse ----------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="channels",
@@ -451,35 +533,78 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_post = sub.add_parser("post", help="post a message to a channel")
-    p_post.add_argument("--from", dest="from_slug", default=None,
-                        help="agent slug describing this session's task")
-    p_post.add_argument("--session", dest="session", default=None,
-                        help="session id (defaults to $CLAUDE_CODE_SESSION_ID)")
+    p_post.add_argument(
+        "--from",
+        dest="from_slug",
+        default=None,
+        help="agent slug describing this session's task",
+    )
+    p_post.add_argument(
+        "--session",
+        dest="session",
+        default=None,
+        help="session id (defaults to $CLAUDE_CODE_SESSION_ID)",
+    )
     p_post.add_argument("name")
     p_post.add_argument("body", help="message body, or '-' to read from stdin")
     p_post.set_defaults(func=cmd_post)
 
     p_read = sub.add_parser("read", help="read messages from a channel")
     p_read.add_argument("name")
-    p_read.add_argument("--seq", type=int, default=None,
-                        help="show only the message with this seq")
-    p_read.add_argument("--since", type=int, default=None,
-                        help="show messages with seq > N")
-    p_read.add_argument("--limit", type=int, default=20,
-                        help="max messages to show (default 20)")
+    p_read.add_argument(
+        "--seq", type=int, default=None, help="show only the message with this seq"
+    )
+    p_read.add_argument(
+        "--since", type=int, default=None, help="show messages with seq > N"
+    )
+    p_read.add_argument(
+        "--limit", type=int, default=20, help="max messages to show (default 20)"
+    )
     p_read.set_defaults(func=cmd_read)
 
     p_tail = sub.add_parser("tail", help="tail the latest message; --follow to stream")
     p_tail.add_argument("name")
-    p_tail.add_argument("--follow", action="store_true",
-                        help="stream new messages as they arrive")
-    p_tail.add_argument("--from-start", action="store_true",
-                        help="print all existing messages before following")
+    p_tail.add_argument(
+        "--follow", action="store_true", help="stream new messages as they arrive"
+    )
+    p_tail.add_argument(
+        "--from-start",
+        action="store_true",
+        help="print all existing messages before following",
+    )
     p_tail.set_defaults(func=cmd_tail)
 
+    p_watch = sub.add_parser(
+        "watch",
+        help="block until a new message arrives on any channel, then exit",
+    )
+    p_watch.add_argument("names", nargs="+", help="one or more channel names")
+    p_watch.add_argument(
+        "--since",
+        type=int,
+        default=None,
+        help="fire on messages with seq > N (applies to all channels). "
+        "Default: each channel's current high-water mark at start.",
+    )
+    p_watch.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="exit with code 2 if no message arrives within N seconds (default: no timeout)",
+    )
+    p_watch.add_argument(
+        "--poll-interval",
+        type=float,
+        default=1.0,
+        dest="poll_interval",
+        help="seconds between file checks (default 1.0; min 0.05)",
+    )
+    p_watch.set_defaults(func=cmd_watch)
+
     p_list = sub.add_parser("list", help="list channels")
-    p_list.add_argument("--archived", action="store_true",
-                        help="list archived channels instead")
+    p_list.add_argument(
+        "--archived", action="store_true", help="list archived channels instead"
+    )
     p_list.set_defaults(func=cmd_list)
 
     p_arch = sub.add_parser("archive", help="archive a channel")

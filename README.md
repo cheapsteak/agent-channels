@@ -154,6 +154,20 @@ channels tail <channel> [--follow] [--from-start]
 
 Without `--follow`, prints the latest message and exits. With `--follow`, streams new messages until SIGINT or the file is removed. With `--from-start --follow`, prints existing messages first and then follows. `--from-start` works with or without `--follow`; without `--follow` it prints all existing messages and exits. `tail` errors if the channel file does not exist.
 
+### watch
+
+```
+channels watch <channel> [<channel>...] [--since N] [--timeout SECONDS] [--poll-interval SECONDS]
+```
+
+Blocks until a new message arrives on any named channel, prints the new message(s) prefixed with `[<channel>]`, and exits 0. Use this for **event-driven** background-task-chain orchestration: launch with the agent's background tool, idle (zero tokens) until the binary exits, react to stdout, re-launch with bumped `--since`. Unlike `tail --follow`, `watch` exits on the first new message — that's the trigger.
+
+- `--since N`: fire on messages with `seq > N` (applies to all named channels). Default: each channel's current high-water mark at start.
+- `--timeout SECONDS`: exit code 2 if nothing arrives. Use as a safety net so a stalled chain can recover.
+- `--poll-interval SECONDS`: file-check cadence (default 1.0, min 0.05).
+
+`watch` is the right primitive for cross-session orchestration where one agent is the "watcher" reacting to several "worker" agents posting status. For ambient awareness while you're heads-down on your own task, prefer `tail --follow` (streaming) or occasional `read --since N` polls.
+
 ### list
 
 ```

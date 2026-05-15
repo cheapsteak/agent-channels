@@ -119,5 +119,74 @@ if echo -n "$big" | "$CHANNELS" post --from smoke-test help - 2>/dev/null; then
     fail "oversized body should be rejected"
 fi
 
+# ---------- watch ----------
+
+export CLAUDE_CODE_SESSION_ID="test-uuid-12345"
+
+step "watch: timeout exits 2 when no new messages"
+high=$("$CHANNELS" list | awk '/^help / {print $2}')
+out_file="$TMP/watch_timeout.out"
+err_file="$TMP/watch_timeout.err"
+set +e
+"$CHANNELS" watch help --since "$high" --timeout 1 --poll-interval 0.1 \
+    >"$out_file" 2>"$err_file"
+rc=$?
+set -e
+[ "$rc" -eq 2 ] || fail "watch timeout expected rc=2, got $rc"
+grep -q 'timeout' "$err_file" || fail "watch timeout missing 'timeout' on stderr"
+[ ! -s "$out_file" ] || fail "watch timeout should have empty stdout, got: $(cat "$out_file")"
+
+step "watch: fires when a new message arrives"
+"$CHANNELS" post --from smoke-test watchable 'baseline' >/dev/null
+baseline_high=$("$CHANNELS" list | awk '/^watchable / {print $2}')
+out_file="$TMP/watch_fire.out"
+(
+    sleep 0.4
+    "$CHANNELS" post --from smoke-poster watchable 'fired!' >/dev/null
+) &
+poster_pid=$!
+set +e
+"$CHANNELS" watch watchable --since "$baseline_high" --timeout 5 --poll-interval 0.1 \
+    >"$out_file" 2>&1
+rc=$?
+set -e
+wait "$poster_pid" 2>/dev/null || true
+[ "$rc" -eq 0 ] || fail "watch should exit 0 on new message, got $rc; out: $(cat "$out_file")"
+grep -q 'fired!' "$out_file" || fail "watch output missing new message: $(cat "$out_file")"
+grep -q '^\[watchable\]' "$out_file" || fail "watch output missing [channel] prefix: $(cat "$out_file")"
+
+step "watch: fires on whichever of multiple channels writes first"
+"$CHANNELS" post --from smoke-test multi-a 'a-baseline' >/dev/null
+"$CHANNELS" post --from smoke-test multi-b 'b-baseline' >/dev/null
+out_file="$TMP/watch_multi.out"
+(
+    sleep 0.4
+    "$CHANNELS" post --from smoke-poster multi-b 'b-new' >/dev/null
+) &
+poster_pid=$!
+set +e
+"$CHANNELS" watch multi-a multi-b --timeout 5 --poll-interval 0.1 \
+    >"$out_file" 2>&1
+rc=$?
+set -e
+wait "$poster_pid" 2>/dev/null || true
+[ "$rc" -eq 0 ] || fail "multi-channel watch should exit 0; out: $(cat "$out_file")"
+grep -q 'b-new' "$out_file" || fail "multi-channel watch missing trigger msg: $(cat "$out_file")"
+grep -q '^\[multi-b\]' "$out_file" || fail "multi-channel watch missing [multi-b] prefix"
+grep -q '^\[multi-a\]' "$out_file" && fail "multi-channel watch leaked a-channel msg: $(cat "$out_file")"
+
+step "watch: pre-existing messages past --since fire immediately"
+"$CHANNELS" post --from smoke-test instant 'msg-1' >/dev/null
+"$CHANNELS" post --from smoke-test instant 'msg-2' >/dev/null
+out_file="$TMP/watch_instant.out"
+set +e
+"$CHANNELS" watch instant --since 0 --timeout 5 --poll-interval 0.1 \
+    >"$out_file" 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 0 ] || fail "watch with backlog should exit 0 immediately, got $rc"
+grep -q 'msg-1' "$out_file" || fail "watch missing backlog msg-1"
+grep -q 'msg-2' "$out_file" || fail "watch missing backlog msg-2"
+
 echo
 echo "PASS"

@@ -1,6 +1,6 @@
 {
   "name": "agent-channels",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Slack-style channels for cross-session AI agent messaging",
   "author": { "name": "Chang Wang" },
   "repository": "https://github.com/cheapsteak/agent-channels",
