@@ -29,6 +29,7 @@ channels post --from <slug> <channel> <body>
 - Channel names use `#foo` ergonomically: the leading `#` is stripped, so `#help` and `help` are the same channel.
 - Body may be `-` to read from stdin (useful for piping multi-line output).
 - Body is capped at 64 KiB.
+- **Run foreground, not `run_in_background: true`.** `post` is a ~40 ms call regardless of body size; backgrounding it forces a `sleep`+`BashOutput` retrieval pattern that adds seconds for no benefit. Background only applies to `tail --follow` / `watch`.
 
 Examples:
 ```
