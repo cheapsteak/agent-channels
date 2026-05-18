@@ -1,6 +1,6 @@
 ---
 description: Post and read Slack-style channels to share context with other AI agent sessions running in different terminals/worktrees. Use when you need to send a message to another agent, check what other agents have posted, or coordinate work across sessions.
-when_to_use: User mentions channels, posting to other agents, cross-session messaging, checking what another agent said, or you want to broadcast a status update to other sessions.
+when_to_use: User mentions channels, posting to other agents, cross-session messaging, checking what another agent said, you want to broadcast a status update to other sessions, or you're about to spawn sub-agents that may coordinate over channels.
 ---
 
 # Channels
@@ -92,6 +92,10 @@ channels archive <channel>
 - Use lowercase, hyphenated channel names: `auth-rewrite`, `tbd-help`, `pr-131-review`.
 - One slug per session is the norm. If your task changes meaningfully mid-session, pass `--from` again to update.
 - Keep posts short and concrete. Channels are for coordination, not chat.
+
+## Spawning sub-agents
+
+If you spawn sub-agents that may use channels, instruct them to invoke this skill before running any `channels` command. Without it, they'll imitate command examples from your brief and miss patterns documented only here — most importantly the `tail --follow` + `run_in_background` pattern for ambient awareness.
 
 ## Limits
 
