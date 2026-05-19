@@ -188,5 +188,105 @@ set -e
 grep -q 'msg-1' "$out_file" || fail "watch missing backlog msg-1"
 grep -q 'msg-2' "$out_file" || fail "watch missing backlog msg-2"
 
+# ---------- edit ----------
+
+step "edit: post a message then edit it"
+"$CHANNELS" post --from smoke-test editable 'original body' >/dev/null \
+    || fail "edit setup post failed"
+out="$("$CHANNELS" edit editable 1 'updated body' 2>&1)" \
+    || fail "edit errored: $out"
+echo "$out" | grep -q 'editable #2 (edit of #1)' \
+    || fail "edit output wrong: $out"
+
+step "edit: read default shows latest body + (edited) marker, edit record hidden"
+out="$("$CHANNELS" read editable)"
+echo "$out" | grep -q 'updated body (edited)' \
+    || fail "read default missing folded edit: $out"
+echo "$out" | grep -q 'original body' \
+    && fail "read default leaked stale original body: $out"
+echo "$out" | grep -q 'edit of #1' \
+    && fail "read default leaked raw edit record: $out"
+
+step "edit: read --seq 1 shows folded (latest body + marker)"
+out="$("$CHANNELS" read editable --seq 1)"
+echo "$out" | grep -q 'updated body (edited)' \
+    || fail "read --seq 1 missing folded body: $out"
+
+step "edit: read --seq 2 shows the raw edit record"
+out="$("$CHANNELS" read editable --seq 2)"
+echo "$out" | grep -q 'edit of #1: updated body' \
+    || fail "read --seq 2 missing edit-form: $out"
+
+step "edit: tail shows the edit as edit-form"
+out="$("$CHANNELS" tail editable)"
+echo "$out" | grep -q 'edit of #1: updated body' \
+    || fail "tail did not show edit-form: $out"
+
+step "edit: multiple edits — latest body wins, marker stays"
+"$CHANNELS" edit editable 1 'third body' >/dev/null || fail "second edit failed"
+out="$("$CHANNELS" read editable --seq 1)"
+echo "$out" | grep -q 'third body (edited)' \
+    || fail "second edit not reflected: $out"
+
+step "edit: --since surfaces edit of an older message"
+# editable has: #1 orig, #2 edit-of-1, #3 edit-of-1. Ask for --since 2.
+out="$("$CHANNELS" read editable --since 2)"
+echo "$out" | grep -q 'edit of #1: third body' \
+    || fail "--since 2 missing edit notification for old msg: $out"
+# original #1 should NOT appear (its seq is 1, not > 2)
+echo "$out" | grep -E '^#1 ' && fail "--since 2 leaked original #1: $out"
+
+step "edit: reject non-existent seq"
+if "$CHANNELS" edit editable 999 'nope' 2>/dev/null; then
+    fail "edit should reject non-existent seq"
+fi
+
+step "edit: reject editing an edit record"
+if "$CHANNELS" edit editable 2 'nope' 2>/dev/null; then
+    fail "edit should reject editing an edit record"
+fi
+
+step "edit: reject seq < 1"
+if "$CHANNELS" edit editable 0 'nope' 2>/dev/null; then
+    fail "edit should reject seq 0"
+fi
+
+step "edit: errors when channel does not exist"
+if "$CHANNELS" edit ghost-channel 1 'nope' 2>/dev/null; then
+    fail "edit should error on missing channel"
+fi
+
+step "edit: body via stdin"
+echo -n "stdin edit" | "$CHANNELS" edit editable 1 - >/dev/null \
+    || fail "stdin edit failed"
+out="$("$CHANNELS" read editable --seq 1)"
+echo "$out" | grep -q 'stdin edit (edited)' \
+    || fail "stdin edit body not reflected: $out"
+
+step "edit: body cap enforced"
+big=$(python3 -c 'print("x" * (64*1024 + 1), end="")')
+if echo -n "$big" | "$CHANNELS" edit editable 1 - 2>/dev/null; then
+    fail "oversized edit body should be rejected"
+fi
+
+step "edit: watch fires on edit and prints edit-form"
+"$CHANNELS" post --from smoke-test watch-edit 'baseline' >/dev/null
+baseline_high=$("$CHANNELS" list | awk '/^watch-edit / {print $2}')
+out_file="$TMP/watch_edit.out"
+(
+    sleep 0.4
+    "$CHANNELS" edit watch-edit 1 'edited!' >/dev/null
+) &
+poster_pid=$!
+set +e
+"$CHANNELS" watch watch-edit --since "$baseline_high" --timeout 5 --poll-interval 0.1 \
+    >"$out_file" 2>&1
+rc=$?
+set -e
+wait "$poster_pid" 2>/dev/null || true
+[ "$rc" -eq 0 ] || fail "watch on edit should exit 0, got $rc; out: $(cat "$out_file")"
+grep -q 'edit of #1: edited!' "$out_file" \
+    || fail "watch did not print edit-form: $(cat "$out_file")"
+
 echo
 echo "PASS"
