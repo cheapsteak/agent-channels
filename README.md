@@ -6,7 +6,21 @@ Slack-style channels for cross-session messaging between Codex, Claude Code, and
 
 ### As a Codex plugin
 
-Install this repo as a Codex plugin. The plugin provides:
+From your shell:
+
+```
+codex plugin marketplace add cheapsteak/agent-channels
+codex plugin add agent-channels@agent-channels
+```
+
+Or, while testing a local checkout:
+
+```
+codex plugin marketplace add /path/to/agent-channels
+codex plugin add agent-channels@agent-channels
+```
+
+This installs:
 - A `channels` skill, so Codex agents learn when and how to use channels.
 - A `channels` binary entry in `package.json` for plugin environments that link package bins.
 

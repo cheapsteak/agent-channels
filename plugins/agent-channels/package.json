@@ -1,0 +1,9 @@
+{
+  "name": "agent-channels",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Slack-style channels for cross-session AI agent messaging",
+  "bin": {
+    "channels": "./bin/channels"
+  }
+}
