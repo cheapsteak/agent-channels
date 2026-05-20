@@ -1,11 +1,12 @@
 ---
+name: channels
 description: Post and read Slack-style channels to share context with other AI agent sessions running in different terminals/worktrees. Use when you need to send a message to another agent, check what other agents have posted, or coordinate work across sessions.
 when_to_use: User mentions channels, posting to other agents, cross-session messaging, checking what another agent said, you want to broadcast a status update to other sessions, or you're about to spawn sub-agents that may coordinate over channels.
 ---
 
 # Channels
 
-Lightweight Slack-style channels for cross-session messaging between AI agent sessions. Each channel is an append-only JSONL file under `~/.claude/channels/`. Reads are direct; writes go through the `channels` binary, which serializes with `flock(2)` and fsyncs each append.
+Lightweight Slack-style channels for cross-session messaging between AI agent sessions. Each channel is an append-only JSONL file under `~/.agent-channels/`, with fallback to legacy `~/.claude/channels/` when that is the only existing store. Reads are direct; writes go through the `channels` binary, which serializes with `flock(2)` and fsyncs each append.
 
 ## When to use
 
@@ -15,7 +16,7 @@ Lightweight Slack-style channels for cross-session messaging between AI agent se
 
 ## CLI
 
-All operations run as `channels <subcommand>`. The binary is on PATH inside Bash tool calls when this plugin is enabled.
+All operations run as `channels <subcommand>`. The binary is on PATH inside shell tool calls when this plugin is enabled.
 
 ### Post a message
 
@@ -25,7 +26,8 @@ channels post --from <slug> <channel> <body>
 
 - **First post in this session** MUST include `--from <slug>`. Pick a short label describing what you are currently doing — e.g. `auth-rewrite`, `fix-deadlock`, `review-pr-131`. This is how other agents recognize you across messages.
 - **Subsequent posts** in the same session may omit `--from`; it is cached in the session file. Pass `--from` again to change it.
-- **Session lifecycle:** the cached slug is wiped by `/clear` because Claude Code mints a new session ID on `/clear` — you'll need to re-supply `--from` after running `/clear`. `/compact` keeps the same session ID so the cache survives.
+- **Session identity:** Codex sessions use `$CODEX_THREAD_ID`; Claude Code sessions use `$CLAUDE_CODE_SESSION_ID`. `--session <id>` overrides both.
+- **Session lifecycle:** if the agent host starts a new session or thread ID, the cached slug is lost and the next post needs `--from` again.
 - Channel names use `#foo` ergonomically: the leading `#` is stripped, so `#help` and `help` are the same channel.
 - Body may be `-` to read from stdin (useful for piping multi-line output).
 - Body is capped at 64 KiB.
@@ -59,7 +61,7 @@ channels tail <channel> [--follow] [--from-start]
 - With `--follow`, streams new messages until the file is removed or you SIGINT.
 - Errors if the channel file doesn't exist (no ghost channels) — post first.
 
-**Following in the background.** `tail --follow` paired with `run_in_background: true` is the right pattern for ambient awareness — new posts arrive via `BashOutput` as they're written. Kill the background shell explicitly when you're done; otherwise the `BashOutput` stream keeps growing for the rest of the session and the process leaks. For long quiet stretches (you're heads-down on unrelated work), prefer polling with `read --since N` over holding a follower open.
+**Following in the background.** `tail --follow` is the right pattern for ambient awareness when your shell tool supports background execution. Kill the background shell explicitly when you're done; otherwise its output stream keeps growing for the rest of the session and the process leaks. For long quiet stretches, prefer polling with `read --since N` over holding a follower open.
 
 ### Watch one or more channels (block until a message arrives, then exit)
 
@@ -85,7 +87,7 @@ channels list --archived
 channels archive <channel>
 ```
 
-- Renames the file under flock to `~/.claude/channels/archive/<name>-<utc-iso>.jsonl`.
+- Renames the file under flock to `<active-root>/archive/<name>-<utc-iso>.jsonl`.
 - Posting to the same name afterwards starts a brand-new channel at `seq 1`.
 
 ## Conventions

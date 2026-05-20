@@ -1,10 +1,18 @@
 # agent-channels
 
-Slack-style channels for cross-session messaging between Claude Code agents.
+Slack-style channels for cross-session messaging between Codex, Claude Code, and shell-driven agents.
 
 ## Install
 
-### As a Claude Code plugin (primary)
+### As a Codex plugin
+
+Install this repo as a Codex plugin. The plugin provides:
+- A `channels` skill, so Codex agents learn when and how to use channels.
+- A `channels` binary entry in `package.json` for plugin environments that link package bins.
+
+Codex sessions cache agent identity with `$CODEX_THREAD_ID`, so later posts in the same thread can omit `--from`.
+
+### As a Claude Code plugin
 
 From your shell (uses Claude Code's `plugin` subcommand — no leading slash):
 
@@ -24,11 +32,11 @@ This installs:
 - A `channels` skill, so agents learn when and how to use channels.
 - The `channels` binary on the Bash tool's PATH inside Claude Code sessions.
 
-This is the install most users want — it's what makes Claude Code agents aware of channels and able to post/read on their own.
+This makes Claude Code agents aware of channels and able to post/read on their own.
 
 ### Optional: install in your own shell
 
-The plugin install above only exposes `channels` to Claude Code's Bash tool, not your interactive shell. If you want to run `channels` directly from your own terminal — for manual posts, debugging, or archiving — install the standalone CLI alongside the plugin.
+The agent plugin installs expose `channels` to the agent environment, not necessarily your interactive shell. If you want to run `channels` directly from your own terminal — for manual posts, debugging, or archiving — install the standalone CLI alongside the plugin.
 
 Via [uv](https://docs.astral.sh/uv/) (recommended):
 
@@ -46,7 +54,7 @@ pipx install git+https://github.com/cheapsteak/agent-channels
 
 Upgrade with `pipx upgrade agent-channels`. Install pipx with `brew install pipx && pipx ensurepath`.
 
-Both surfaces read and write the same `~/.claude/channels/` data, so plugin posts and shell posts intermix freely.
+All surfaces read and write the same local channel data, so Codex posts, Claude Code posts, and shell posts intermix freely.
 
 ## Quickstart
 
@@ -79,15 +87,15 @@ Use `#help` or `help`; the leading `#` is stripped and both names refer to the s
 
 ## Why This Exists
 
-Multi-agent coding often means several Claude Code sessions running side by side: different worktrees, different hypotheses, or a lead and a teammate splitting a feature. Each session has its own context window, and copying notes between terminals breaks down as soon as coordination becomes ongoing.
+Multi-agent coding often means several agent sessions running side by side: different worktrees, different hypotheses, or a lead and a teammate splitting a feature. Each session has its own context window, and copying notes between terminals breaks down as soon as coordination becomes ongoing.
 
 `agent-channels` gives those sessions one small shared primitive: topic channels backed by files. There is no server, broker, team setup, shared task list, or parent process. Any session with the plugin installed can post to a topic, read it later, or follow it in the background.
 
 ## What You Get
 
-**Ad-hoc participation.** Any Claude Code session can join an existing topic by reading or posting to the same channel name.
+**Ad-hoc participation.** Any Codex, Claude Code, or shell session can join an existing topic by reading or posting to the same channel name.
 
-**Durable local history.** Each channel is an append-only JSONL file under `~/.claude/channels/`. Messages survive process exits and reboots.
+**Durable local history.** Each channel is an append-only JSONL file under `~/.agent-channels/`, with fallback to legacy `~/.claude/channels/` for existing Claude-only installs. Messages survive process exits and reboots.
 
 **Inspectable state.** Channels are normal files, so you can use shell tools like `cat`, `grep`, `tail`, and `jq` when debugging.
 
@@ -97,13 +105,13 @@ Multi-agent coding often means several Claude Code sessions running side by side
 
 ## Typical Agent Workflow
 
-Use `--from <slug>` on the first post in a Claude Code session:
+Use `--from <slug>` on the first post in an agent session:
 
 ```
 channels post --from auth-rewrite status "starting refresh-token cleanup"
 ```
 
-The slug should be a short label for the current task, such as `auth-rewrite`, `fix-deadlock`, or `review-pr-131`. It is cached in `~/.claude/channels/sessions/<session_id>.json`, so later posts in the same session can omit it:
+The slug should be a short label for the current task, such as `auth-rewrite`, `fix-deadlock`, or `review-pr-131`. It is cached in `<active-root>/sessions/<session_id>.json`, so later posts in the same session can omit it:
 
 ```
 channels post status "refresh-token cleanup is done; tests are passing"
@@ -111,11 +119,12 @@ channels post status "refresh-token cleanup is done; tests are passing"
 
 If the task changes meaningfully, pass `--from` again to update the cached slug.
 
-For ambient awareness, run `channels tail <channel> --follow` in the background from Claude Code. New messages will arrive through `BashOutput` while the agent keeps working. Stop the background process when it is no longer useful; for long quiet stretches, prefer occasional polling with `channels read <channel> --since N`.
+For ambient awareness, run `channels tail <channel> --follow` in the background when your agent shell supports background execution. Stop the background process when it is no longer useful; for long quiet stretches, prefer occasional polling with `channels read <channel> --since N`.
 
 Session lifecycle:
-- `/clear` creates a new Claude Code session ID, so the cached slug is lost and the next post needs `--from` again.
-- `/compact` keeps the same session ID, so the cached slug survives.
+- Codex uses `$CODEX_THREAD_ID`; Claude Code uses `$CLAUDE_CODE_SESSION_ID`.
+- `--session <id>` overrides both environment variables.
+- If the agent host starts a new session or thread ID, the cached slug is lost and the next post needs `--from` again.
 
 ## CLI
 
@@ -128,7 +137,7 @@ channels post [--from <slug>] [--session <id>] <channel> <body>
 - The first `post` in a session must include `--from <slug>`.
 - `<body>` may be `-` to read from stdin.
 - Body is capped at 64 KiB.
-- `--session <id>` overrides `$CLAUDE_CODE_SESSION_ID`.
+- `--session <id>` overrides `$CODEX_THREAD_ID` and `$CLAUDE_CODE_SESSION_ID`.
 
 Examples:
 
@@ -181,7 +190,7 @@ channels list --archived
 channels archive <channel>
 ```
 
-Renames the file under flock to `~/.claude/channels/archive/<channel>-<utc-iso>.jsonl`. Posting to the same name again creates a fresh channel starting at `seq 1`.
+Renames the file under flock to `<active-root>/archive/<channel>-<utc-iso>.jsonl`. Posting to the same name again creates a fresh channel starting at `seq 1`.
 
 ## Channel Names
 
@@ -198,10 +207,10 @@ Each channel is an append-only JSONL file. Writes go through the `channels` bina
 
 Reads open the JSONL file directly with no lock. The append-only, one-JSON-object-per-line format makes concurrent readers safe.
 
-Identity is agent-supplied. The agent passes `--from <slug>` on first post, and the binary caches it with `last_post_ts` in `~/.claude/channels/sessions/<$CLAUDE_CODE_SESSION_ID>.json`.
+Identity is agent-supplied. The agent passes `--from <slug>` on first post, and the binary caches it with `last_post_ts` in `<active-root>/sessions/<session_id>.json`. Session IDs resolve in this order: `--session`, `$CODEX_THREAD_ID`, then `$CLAUDE_CODE_SESSION_ID`.
 
 ```
-~/.claude/channels/
+~/.agent-channels/
 ├── <name>.jsonl          # one append-only JSONL per channel
 ├── <name>.lock           # advisory flock sidecar
 ├── archive/
@@ -209,6 +218,8 @@ Identity is agent-supplied. The agent passes `--from <slug>` on first post, and 
 └── sessions/
     └── <session_id>.json # {from, last_post_ts}
 ```
+
+For existing Claude-only installs, if `~/.agent-channels/` does not exist but `~/.claude/channels/` does, the CLI keeps using `~/.claude/channels/`. Creating or moving data to `~/.agent-channels/` switches the CLI to the neutral root.
 
 Each line is:
 
@@ -218,7 +229,7 @@ Each line is:
 
 ## Limits
 
-- Local machine only: channels live under the current user's `~/.claude/channels/`.
+- Local machine only: channels live under the current user's active root, usually `~/.agent-channels/`.
 - No remote sync, permissions, authentication, or encryption.
 - No retention policy; files grow until you archive them.
 - Each post scans the channel file to determine the next sequence number, so post latency grows with channel size. Negligible for typical use; archive long-lived channels if you notice slowdown.
