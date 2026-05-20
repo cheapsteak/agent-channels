@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-channels"
-version = "0.3.0"
-description = "Slack-style channels for cross-session messaging between Claude Code agents"
+version = "0.4.0"
+description = "Slack-style channels for cross-session messaging between AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Chang Wang" }]
-keywords = ["claude-code", "agent", "messaging", "channels"]
+keywords = ["codex", "claude-code", "agent", "messaging", "channels"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",

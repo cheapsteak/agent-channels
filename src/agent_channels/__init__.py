@@ -1,9 +1,9 @@
 """channels — Slack-style channels for cross-session AI agent messaging.
 
-Source of truth is per-channel append-only JSONL at
-~/.claude/channels/<name>.jsonl. Writes go through this binary under
-fcntl.flock for cross-process coordination, with os.fsync for durability.
-Reads open files directly.
+Source of truth is per-channel append-only JSONL at ~/.agent-channels/,
+falling back to legacy ~/.claude/channels/ when that is the only existing
+store. Writes go through this binary under fcntl.flock for cross-process
+coordination, with os.fsync for durability. Reads open files directly.
 """
 
 from __future__ import annotations
@@ -20,9 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-CHANNELS_ROOT = Path.home() / ".claude" / "channels"
-ARCHIVE_DIR = CHANNELS_ROOT / "archive"
-SESSIONS_DIR = CHANNELS_ROOT / "sessions"
+NEUTRAL_ROOT_NAME = ".agent-channels"
+LEGACY_ROOT_PARTS = (".claude", "channels")
 
 MAX_BODY_BYTES = 64 * 1024
 NAME_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
@@ -63,20 +62,51 @@ def canonical_name(raw: str) -> str:
 
 
 def channel_path(name: str) -> Path:
-    return CHANNELS_ROOT / f"{name}.jsonl"
+    return channels_root() / f"{name}.jsonl"
 
 
 def lock_path(name: str) -> Path:
-    return CHANNELS_ROOT / f"{name}.lock"
+    return channels_root() / f"{name}.lock"
 
 
 # ---------- filesystem helpers ----------
 
+def neutral_root() -> Path:
+    return Path.home() / NEUTRAL_ROOT_NAME
+
+
+def legacy_root() -> Path:
+    return Path.home().joinpath(*LEGACY_ROOT_PARTS)
+
+
+def channels_root() -> Path:
+    """Return the active data root.
+
+    Prefer the product-neutral root when it exists, or for fresh installs.
+    Keep using the legacy Claude root when it is the only existing store so
+    upgraded Claude-only installs do not lose sight of existing channels.
+    """
+    neutral = neutral_root()
+    legacy = legacy_root()
+    if neutral.exists() or not legacy.exists():
+        return neutral
+    return legacy
+
+
+def archive_dir() -> Path:
+    return channels_root() / "archive"
+
+
+def sessions_dir() -> Path:
+    return channels_root() / "sessions"
+
+
 
 def ensure_dirs() -> None:
-    CHANNELS_ROOT.mkdir(parents=True, exist_ok=True)
-    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    root = channels_root()
+    root.mkdir(parents=True, exist_ok=True)
+    archive_dir().mkdir(parents=True, exist_ok=True)
+    sessions_dir().mkdir(parents=True, exist_ok=True)
 
 
 def now_iso() -> str:
@@ -87,7 +117,7 @@ def now_iso() -> str:
 
 
 def session_file(session_id: str) -> Path:
-    return SESSIONS_DIR / f"{session_id}.json"
+    return sessions_dir() / f"{session_id}.json"
 
 
 def read_session(session_id: str) -> dict:
@@ -111,7 +141,10 @@ def write_session(session_id: str, data: dict) -> None:
 def resolve_session_id(explicit: Optional[str]) -> Optional[str]:
     if explicit:
         return explicit
-    return os.environ.get("CLAUDE_CODE_SESSION_ID")
+    return (
+        os.environ.get("CODEX_THREAD_ID")
+        or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    )
 
 
 # ---------- JSONL scan / torn-line recovery ----------
@@ -452,7 +485,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     ensure_dirs()
     if args.archived:
         rows = []
-        for p in sorted(ARCHIVE_DIR.glob("*.jsonl")):
+        for p in sorted(archive_dir().glob("*.jsonl")):
             rows.append((p.name, p.stat().st_mtime))
         if not rows:
             print("(no archived channels)")
@@ -464,7 +497,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         return 0
 
     rows = []
-    for p in sorted(CHANNELS_ROOT.glob("*.jsonl")):
+    for p in sorted(channels_root().glob("*.jsonl")):
         last_seq = 0
         last_ts = ""
         count = 0
@@ -507,7 +540,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
             .replace("+00:00", "Z")
             .replace(":", "-")
         )
-        target = ARCHIVE_DIR / f"{name}-{ts}.jsonl"
+        target = archive_dir() / f"{name}-{ts}.jsonl"
         os.replace(cp, target)
         try:
             lp.unlink()
@@ -543,7 +576,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--session",
         dest="session",
         default=None,
-        help="session id (defaults to $CLAUDE_CODE_SESSION_ID)",
+        help="session id (defaults to $CODEX_THREAD_ID or $CLAUDE_CODE_SESSION_ID)",
     )
     p_post.add_argument("name")
     p_post.add_argument("body", help="message body, or '-' to read from stdin")

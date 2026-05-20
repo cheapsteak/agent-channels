@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: post -> read -> list -> archive -> list --archived round-trip.
-# Uses a temp HOME so it doesn't touch your real ~/.claude/channels.
+# Uses temp HOME directories so it doesn't touch your real channel stores.
 set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -8,7 +8,9 @@ CHANNELS="$REPO_ROOT/bin/channels"
 TMP="$(mktemp -d -t agent-channels-smoke.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
-export HOME="$TMP"
+export HOME="$TMP/fresh"
+mkdir -p "$HOME"
+unset CODEX_THREAD_ID
 export CLAUDE_CODE_SESSION_ID="test-uuid-12345"
 
 fail() {
@@ -21,7 +23,7 @@ step() {
 }
 
 step "no session file exists before first post (lazy-init)"
-test ! -e "$HOME/.claude/channels/sessions/test-uuid-12345.json" \
+test ! -e "$HOME/.agent-channels/sessions/test-uuid-12345.json" \
     || fail "session file should not exist before first post"
 
 step "post #1 (requires --from)"
@@ -30,8 +32,9 @@ out="$("$CHANNELS" post --from smoke-test '#help' 'first message' 2>&1)" \
 echo "$out" | grep -q '^help #1' || fail "post #1 unexpected output: $out"
 
 step "lazy-init created session file with {from, last_post_ts}"
-sess="$HOME/.claude/channels/sessions/test-uuid-12345.json"
+sess="$HOME/.agent-channels/sessions/test-uuid-12345.json"
 test -f "$sess" || fail "session file was not created by lazy-init: $sess"
+test ! -e "$HOME/.claude/channels" || fail "fresh install should use neutral root"
 python3 -c "
 import json, sys
 d = json.load(open('$sess'))
@@ -76,7 +79,7 @@ echo "$out" | grep -q '^help ' || fail "list missing help channel"
 
 step "archive"
 "$CHANNELS" archive help >/dev/null || fail "archive errored"
-test ! -f "$HOME/.claude/channels/help.jsonl" || fail "archive left original file"
+test ! -f "$HOME/.agent-channels/help.jsonl" || fail "archive left original file"
 
 step "list --archived"
 out="$("$CHANNELS" list --archived)"
@@ -187,6 +190,55 @@ set -e
 [ "$rc" -eq 0 ] || fail "watch with backlog should exit 0 immediately, got $rc"
 grep -q 'msg-1' "$out_file" || fail "watch missing backlog msg-1"
 grep -q 'msg-2' "$out_file" || fail "watch missing backlog msg-2"
+step "legacy Claude root is used when it is the only existing store"
+export HOME="$TMP/legacy"
+mkdir -p "$HOME/.claude/channels"
+unset CODEX_THREAD_ID
+export CLAUDE_CODE_SESSION_ID="legacy-session-1"
+out="$("$CHANNELS" post --from legacy-agent legacy 'legacy message' 2>&1)" \
+    || fail "legacy post errored: $out"
+echo "$out" | grep -q '^legacy #1' || fail "legacy post unexpected output: $out"
+test -f "$HOME/.claude/channels/legacy.jsonl" \
+    || fail "legacy root should receive message"
+test ! -e "$HOME/.agent-channels" \
+    || fail "neutral root should not be created when legacy root is the only existing store"
+
+step "neutral root wins when both neutral and legacy roots exist"
+mkdir -p "$HOME/.agent-channels"
+out="$("$CHANNELS" post --from neutral-agent neutral 'neutral message' 2>&1)" \
+    || fail "neutral post errored: $out"
+echo "$out" | grep -q '^neutral #1' || fail "neutral post unexpected output: $out"
+test -f "$HOME/.agent-channels/neutral.jsonl" \
+    || fail "neutral root should receive message when both roots exist"
+test ! -f "$HOME/.claude/channels/neutral.jsonl" \
+    || fail "legacy root should not receive neutral-root message"
+
+step "Codex thread id creates cached session"
+export HOME="$TMP/codex"
+mkdir -p "$HOME"
+export CODEX_THREAD_ID="codex-thread-123"
+unset CLAUDE_CODE_SESSION_ID
+out="$("$CHANNELS" post --from codex-agent codex 'codex message' 2>&1)" \
+    || fail "codex post errored: $out"
+echo "$out" | grep -q '^codex #1' || fail "codex post unexpected output: $out"
+test -f "$HOME/.agent-channels/sessions/codex-thread-123.json" \
+    || fail "Codex session file was not created"
+out="$("$CHANNELS" post codex 'cached codex message' 2>&1)" \
+    || fail "codex cached post errored: $out"
+echo "$out" | grep -q '^codex #2' || fail "codex cached post unexpected output: $out"
+
+step "Codex thread id takes precedence over Claude session id"
+export HOME="$TMP/precedence"
+mkdir -p "$HOME"
+export CODEX_THREAD_ID="codex-wins"
+export CLAUDE_CODE_SESSION_ID="claude-loses"
+out="$("$CHANNELS" post --from precedence-agent precedence 'precedence message' 2>&1)" \
+    || fail "precedence post errored: $out"
+echo "$out" | grep -q '^precedence #1' || fail "precedence post unexpected output: $out"
+test -f "$HOME/.agent-channels/sessions/codex-wins.json" \
+    || fail "Codex precedence session file was not created"
+test ! -f "$HOME/.agent-channels/sessions/claude-loses.json" \
+    || fail "Claude session should not be used when Codex thread id is set"
 
 echo
 echo "PASS"
