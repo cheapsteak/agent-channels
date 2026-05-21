@@ -8,7 +8,7 @@
       "name": "agent-channels",
       "source": {
         "source": "local",
-        "path": "."
+        "path": "./plugins/agent-channels"
       },
       "policy": {
         "installation": "AVAILABLE",
