@@ -189,23 +189,27 @@ def scan_last_good(fd: int) -> tuple[int, int]:
     return last_good_end, highest_seq
 
 
-# ---------- POST ----------
+# ---------- write helpers (shared by post + edit) ----------
 
 
-def cmd_post(args: argparse.Namespace) -> int:
-    name = canonical_name(args.name)
-
-    body = args.body
-    if body == "-":
-        body = sys.stdin.read()
-    if body is None:
+def _read_body_arg(body_arg: Optional[str]) -> str:
+    if body_arg is None:
         die("body is required")
-    body_bytes = body.encode("utf-8")
-    if len(body_bytes) > MAX_BODY_BYTES:
-        die(f"body too large: {len(body_bytes)} bytes (max {MAX_BODY_BYTES})")
+    body = sys.stdin.read() if body_arg == "-" else body_arg
+    n = len(body.encode("utf-8"))
+    if n > MAX_BODY_BYTES:
+        die(f"body too large: {n} bytes (max {MAX_BODY_BYTES})")
+    return body
 
+
+def _resolve_slug_for_write(args: argparse.Namespace) -> tuple[str, Optional[str], dict]:
+    """Resolve (slug, session_id, session_data) for a write op.
+
+    Reads cached slug from the session file if --from is omitted; dies if no
+    slug is available. Caller is responsible for writing session_data back
+    after a successful append.
+    """
     session_id = resolve_session_id(args.session)
-
     slug = args.from_slug
     session_data: dict = {}
     if session_id:
@@ -214,13 +218,22 @@ def cmd_post(args: argparse.Namespace) -> int:
             slug = session_data.get("from")
         elif session_data.get("from") and session_data["from"] != slug:
             session_data["from"] = slug
-
     if not slug:
         die(
             "first post in this session requires --from <slug> "
             "(a short label describing this agent's current task, e.g. 'auth-rewrite'). "
             "It will be cached so subsequent posts can omit it."
         )
+    return slug, session_id, session_data
+
+
+# ---------- POST ----------
+
+
+def cmd_post(args: argparse.Namespace) -> int:
+    name = canonical_name(args.name)
+    body = _read_body_arg(args.body)
+    slug, session_id, session_data = _resolve_slug_for_write(args)
 
     ensure_dirs()
 
@@ -265,6 +278,76 @@ def cmd_post(args: argparse.Namespace) -> int:
             os.close(lock_fd)
 
 
+# ---------- EDIT ----------
+
+
+def cmd_edit(args: argparse.Namespace) -> int:
+    name = canonical_name(args.name)
+    target_seq = args.seq
+    if target_seq < 1:
+        die(f"seq must be >= 1, got {target_seq}")
+    body = _read_body_arg(args.body)
+    slug, session_id, session_data = _resolve_slug_for_write(args)
+
+    ensure_dirs()
+
+    lp = lock_path(name)
+    lock_fd = os.open(str(lp), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        cp = channel_path(name)
+        if not cp.exists():
+            die(f"channel {name!r} has no messages yet")
+
+        data_fd = os.open(str(cp), os.O_RDWR | os.O_APPEND, 0o644)
+        try:
+            last_good_end, highest_seq = scan_last_good(data_fd)
+            if last_good_end != os.fstat(data_fd).st_size:
+                os.ftruncate(data_fd, last_good_end)
+
+            target: Optional[dict] = None
+            for m in iter_messages(cp):
+                if m.get("seq") == target_seq:
+                    target = m
+                    break
+            if target is None:
+                die(f"no message with seq {target_seq} in channel {name!r}")
+            if "edit_of" in target:
+                die(
+                    f"#{target_seq} is itself an edit record (of "
+                    f"#{target['edit_of']}); edit the original instead"
+                )
+
+            next_seq = highest_seq + 1
+            record = {
+                "seq": next_seq,
+                "ts": now_iso(),
+                "session_id": session_id or "",
+                "from": slug,
+                "body": body,
+                "edit_of": target_seq,
+            }
+            line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+            os.write(data_fd, line)
+            os.fsync(data_fd)
+        finally:
+            os.close(data_fd)
+
+        if session_id:
+            session_data["from"] = slug
+            session_data["last_post_ts"] = record["ts"]
+            write_session(session_id, session_data)
+
+        print(f"{name} #{next_seq} (edit of #{target_seq})")
+        return 0
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+
 # ---------- READ helpers ----------
 
 
@@ -288,7 +371,57 @@ def format_message(m: dict) -> str:
     ts = m.get("ts", "")
     frm = m.get("from", "?")
     body = m.get("body", "")
-    return f"#{seq} [{ts}] {frm}: {body}"
+    suffix = " (edited)" if m.get("edited") else ""
+    return f"#{seq} [{ts}] {frm}: {body}{suffix}"
+
+
+def format_edit(m: dict) -> str:
+    seq = m.get("seq", "?")
+    ts = m.get("ts", "")
+    frm = m.get("from", "?")
+    target = m.get("edit_of", "?")
+    body = m.get("body", "")
+    return f"#{seq} [{ts}] {frm}: edit of #{target}: {body}"
+
+
+def format_record(m: dict) -> str:
+    return format_edit(m) if "edit_of" in m else format_message(m)
+
+
+def fold_edits(messages: list[dict]) -> tuple[list[dict], dict[int, dict]]:
+    """Collapse edit records into their target originals.
+
+    Returns (folded_originals, latest_edit_by_target_seq). Each folded
+    original is a shallow copy with its body replaced by the latest edit's
+    body and `edited=True` set. Edit records are dropped from the originals
+    list but kept in the lookup so callers can surface "old message edited"
+    notifications.
+    """
+    originals: list[dict] = []
+    latest_edit: dict[int, dict] = {}
+    for m in messages:
+        if "edit_of" in m:
+            target = m.get("edit_of")
+            if not isinstance(target, int):
+                continue
+            cur = latest_edit.get(target)
+            seq = m.get("seq", 0)
+            if cur is None or seq > cur.get("seq", 0):
+                latest_edit[target] = m
+        else:
+            originals.append(m)
+    folded: list[dict] = []
+    for orig in originals:
+        seq = orig.get("seq")
+        edit = latest_edit.get(seq) if isinstance(seq, int) else None
+        if edit:
+            merged = dict(orig)
+            merged["body"] = edit.get("body", orig.get("body", ""))
+            merged["edited"] = True
+            folded.append(merged)
+        else:
+            folded.append(orig)
+    return folded, latest_edit
 
 
 # ---------- READ ----------
@@ -302,22 +435,40 @@ def cmd_read(args: argparse.Namespace) -> int:
     if not path.exists():
         die(f"channel {name!r} has no messages yet")
 
-    selected: list[dict] = []
-    for m in iter_messages(path):
-        seq = m.get("seq")
-        if not isinstance(seq, int):
-            continue
-        if args.seq is not None and seq != args.seq:
-            continue
-        if args.since is not None and seq <= args.since:
-            continue
-        selected.append(m)
+    all_messages = [
+        m for m in iter_messages(path) if isinstance(m.get("seq"), int)
+    ]
+    folded, latest_edit = fold_edits(all_messages)
+
+    if args.seq is not None:
+        for m in all_messages:
+            if m.get("seq") == args.seq:
+                if "edit_of" in m:
+                    print(format_edit(m))
+                else:
+                    for f in folded:
+                        if f.get("seq") == args.seq:
+                            print(format_message(f))
+                            break
+                return 0
+        die(f"no message with seq {args.seq} in channel {name!r}")
+
+    selected: list[dict]
+    if args.since is not None:
+        since = args.since
+        selected = [f for f in folded if f.get("seq", 0) > since]
+        for target_seq, edit in latest_edit.items():
+            if target_seq <= since and edit.get("seq", 0) > since:
+                selected.append(edit)
+        selected.sort(key=lambda m: m.get("seq", 0))
+    else:
+        selected = folded
 
     if args.limit is not None and args.limit > 0:
         selected = selected[-args.limit :]
 
     for m in selected:
-        print(format_message(m))
+        print(format_record(m))
     return 0
 
 
@@ -335,12 +486,12 @@ def cmd_tail(args: argparse.Namespace) -> int:
 
     if args.from_start:
         for m in iter_messages(path):
-            print(format_message(m), flush=True)
+            print(format_record(m), flush=True)
         last_size = path.stat().st_size
     else:
         msgs = list(iter_messages(path))
         if msgs and not args.follow:
-            print(format_message(msgs[-1]), flush=True)
+            print(format_record(msgs[-1]), flush=True)
         last_size = path.stat().st_size
 
     if not args.follow:
@@ -398,7 +549,7 @@ def cmd_tail(args: argparse.Namespace) -> int:
                         m = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    print(format_message(m), flush=True)
+                    print(format_record(m), flush=True)
             else:
                 time.sleep(0.25)
     return 0
@@ -462,11 +613,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
         if new_msgs:
             new_msgs.sort(key=lambda nm: (nm[1].get("ts", ""), nm[1].get("seq", 0)))
             for name, m in new_msgs:
-                seq = m.get("seq", "?")
-                ts = m.get("ts", "")
-                frm = m.get("from", "?")
-                body = m.get("body", "")
-                print(f"[{name}] #{seq} [{ts}] {frm}: {body}", flush=True)
+                print(f"[{name}] {format_record(m)}", flush=True)
             return 0
 
         if deadline is not None and time.monotonic() >= deadline:
@@ -581,6 +728,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_post.add_argument("name")
     p_post.add_argument("body", help="message body, or '-' to read from stdin")
     p_post.set_defaults(func=cmd_post)
+
+    p_edit = sub.add_parser(
+        "edit",
+        help="edit a previously posted message (appends an edit record)",
+    )
+    p_edit.add_argument(
+        "--from",
+        dest="from_slug",
+        default=None,
+        help="agent slug (defaults to cached value from session)",
+    )
+    p_edit.add_argument(
+        "--session",
+        dest="session",
+        default=None,
+        help="session id (defaults to $CLAUDE_CODE_SESSION_ID)",
+    )
+    p_edit.add_argument("name")
+    p_edit.add_argument("seq", type=int, help="seq of the message to edit")
+    p_edit.add_argument("body", help="new body, or '-' to read from stdin")
+    p_edit.set_defaults(func=cmd_edit)
 
     p_read = sub.add_parser("read", help="read messages from a channel")
     p_read.add_argument("name")

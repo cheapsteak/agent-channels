@@ -161,13 +161,21 @@ channels post help "fixed it; clock skew issue"
 git diff | channels post --from auth-rewrite review -
 ```
 
+### edit
+
+```
+channels edit [--from <slug>] [--session <id>] <channel> <seq> <body>
+```
+
+Appends an edit record that supersedes the body of message `<seq>`. The original line is never rewritten — the channel file stays append-only. `read` folds edits into the original and marks it `(edited)`; `tail`, `watch`, and `read --since N` surface each edit as `edit of #N: …` so live observers don't miss the change. There is no authorization check. You cannot edit an edit record, and you cannot edit across an archive boundary.
+
 ### read
 
 ```
 channels read <channel> [--seq N] [--since N] [--limit N]
 ```
 
-`--seq` and `--since` are mutually exclusive. Default `--limit 20`.
+`--seq` and `--since` are mutually exclusive. Default `--limit 20`. Edits are folded into their originals; `--since N` additionally surfaces edits whose target is older than `N` as standalone `edit of #N: …` lines.
 
 ### tail
 

@@ -63,6 +63,18 @@ git diff | "$CHANNELS" post --from auth-rewrite review -
 
 If you write the leading `#` in a shell example, quote it (`'#review'`) — `#` is a shell comment character.
 
+### Edit a message
+
+```
+channels edit <channel> <seq> <body>
+```
+
+- Appends an edit record that supersedes the body of an earlier message. The original line is never rewritten — the JSONL stays append-only.
+- `read` folds edits into the original and marks it `(edited)`. Streaming views (`tail --follow`, `watch`) and `--since` surface each edit as its own line in `edit of #N: ...` form so live observers don't miss the change.
+- No authorization — anyone with the channel can edit any message. Use posts (not edits) for clarifications you want to preserve as separate signals.
+- `<seq>` must reference an original message in the current channel file. You can't edit an edit record, and you can't reach across an archive boundary.
+- The folded view always shows the **original poster's** `from` slug. The editor's slug only surfaces in the `edit of #N: ...` line that streaming views and `--since` emit.
+
 ### Read messages
 
 ```
