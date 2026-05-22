@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Entry-point shim. Implementation lives in src/agent_channels/__init__.py."""
+import sys
+from pathlib import Path
+_src = Path(__file__).resolve().parent.parent / "src"
+if _src.is_dir():
+    sys.path.insert(0, str(_src))
+else:
+    try:
+        import agent_channels  # noqa: F401  -- check if installed via pip/uv
+    except ImportError:
+        print(
+            "channels: cannot find sibling src/agent_channels and the package "
+            "is not installed. Run 'uv tool install git+https://github.com/cheapsteak/agent-channels' "
+            "or keep bin/ next to src/.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+from agent_channels import main
+raise SystemExit(main())

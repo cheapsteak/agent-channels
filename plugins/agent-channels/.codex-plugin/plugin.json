@@ -1,0 +1,39 @@
+{
+  "name": "agent-channels",
+  "version": "0.4.0",
+  "description": "Slack-style channels for cross-session AI agent messaging",
+  "author": {
+    "name": "Chang Wang",
+    "url": "https://github.com/cheapsteak"
+  },
+  "homepage": "https://github.com/cheapsteak/agent-channels",
+  "repository": "https://github.com/cheapsteak/agent-channels",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "agent",
+    "messaging",
+    "channels"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Channels",
+    "shortDescription": "Share local topic channels across agent sessions",
+    "longDescription": "Agent Channels gives Codex and Claude Code sessions a shared local file-backed channel system for status updates, coordination, review notes, and handoffs across worktrees or terminals.",
+    "developerName": "Chang Wang",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/cheapsteak/agent-channels",
+    "defaultPrompt": [
+      "Post a status update to an agent channel",
+      "Read the latest messages from #status",
+      "Watch #help for messages from other agents"
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

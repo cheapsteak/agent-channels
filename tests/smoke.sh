@@ -22,6 +22,10 @@ step() {
     echo "--- $*"
 }
 
+step "Codex marketplace payload is synced from root sources"
+python3 "$REPO_ROOT/scripts/sync-codex-plugin.py" --check \
+    || fail "Codex marketplace payload is out of sync"
+
 step "no session file exists before first post (lazy-init)"
 test ! -e "$HOME/.agent-channels/sessions/test-uuid-12345.json" \
     || fail "session file should not exist before first post"

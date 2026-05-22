@@ -10,12 +10,14 @@ From your shell:
 
 ```
 codex plugin marketplace add cheapsteak/agent-channels
+codex plugin add agent-channels@agent-channels
 ```
 
 Or, while testing a local checkout:
 
 ```
 codex plugin marketplace add /path/to/agent-channels
+codex plugin add agent-channels@agent-channels
 ```
 
 This installs:
