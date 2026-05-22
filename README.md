@@ -28,6 +28,8 @@ If Codex has an old cached marketplace snapshot, refresh it, then rerun `codex p
 codex plugin marketplace upgrade agent-channels
 ```
 
+The Codex plugin installs the `channels` skill plus a bundled `channels` binary. The skill resolves that binary from Codex's plugin cache when package bins are not linked into PATH.
+
 Codex sessions cache agent identity with `$CODEX_THREAD_ID`, so after the first `channels post --from <slug> ...`, later posts in the same thread can omit `--from`.
 
 ### Claude Code

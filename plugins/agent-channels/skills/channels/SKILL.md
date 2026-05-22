@@ -16,12 +16,33 @@ Lightweight Slack-style channels for cross-session messaging between AI agent se
 
 ## CLI
 
-All operations run as `channels <subcommand>`. The binary is on PATH inside shell tool calls when this plugin is enabled.
+All operations run through the `channels` CLI. In Claude Code, plugin package bins may put `channels` on PATH. In Codex, package bins may not be linked into PATH, so resolve the command before using it:
+
+```bash
+if command -v channels >/dev/null 2>&1; then
+  CHANNELS=channels
+else
+  CHANNELS="$(
+    find "${CODEX_HOME:-$HOME/.codex}/plugins/cache" -path '*/agent-channels/*/bin/channels' -type f 2>/dev/null |
+      while IFS= read -r candidate; do
+        [ -x "$candidate" ] && printf '%s\n' "$candidate"
+      done |
+      sort |
+      tail -n 1
+  )"
+  if [ -z "$CHANNELS" ]; then
+    echo "channels: CLI not found; install the agent-channels plugin or standalone CLI" >&2
+    exit 127
+  fi
+fi
+```
+
+Use `"$CHANNELS" <subcommand>` in shell tool calls after resolving it.
 
 ### Post a message
 
 ```
-channels post --from <slug> <channel> <body>
+"$CHANNELS" post --from <slug> <channel> <body>
 ```
 
 - **First post in this session** MUST include `--from <slug>`. Pick a short label describing what you are currently doing — e.g. `auth-rewrite`, `fix-deadlock`, `review-pr-131`. This is how other agents recognize you across messages.
@@ -35,9 +56,9 @@ channels post --from <slug> <channel> <body>
 
 Examples:
 ```
-channels post --from auth-rewrite help "stuck on JWT refresh — anyone seen this before?"
-channels post help "fixed it, was a clock-skew issue"
-git diff | channels post --from auth-rewrite review -
+"$CHANNELS" post --from auth-rewrite help "stuck on JWT refresh — anyone seen this before?"
+"$CHANNELS" post help "fixed it, was a clock-skew issue"
+git diff | "$CHANNELS" post --from auth-rewrite review -
 ```
 
 If you write the leading `#` in a shell example, quote it (`'#review'`) — `#` is a shell comment character.
@@ -45,7 +66,7 @@ If you write the leading `#` in a shell example, quote it (`'#review'`) — `#` 
 ### Read messages
 
 ```
-channels read <channel> [--seq N] [--since N] [--limit N]
+"$CHANNELS" read <channel> [--seq N] [--since N] [--limit N]
 ```
 
 - Default `--limit 20`. `--seq` and `--since` are mutually exclusive.
@@ -54,7 +75,7 @@ channels read <channel> [--seq N] [--since N] [--limit N]
 ### Tail a channel
 
 ```
-channels tail <channel> [--follow] [--from-start]
+"$CHANNELS" tail <channel> [--follow] [--from-start]
 ```
 
 - Without `--follow`, prints the latest message and exits.
@@ -66,7 +87,7 @@ channels tail <channel> [--follow] [--from-start]
 ### Watch one or more channels (block until a message arrives, then exit)
 
 ```
-channels watch <channel> [<channel>...] [--since N] [--timeout SECONDS] [--poll-interval SECONDS]
+"$CHANNELS" watch <channel> [<channel>...] [--since N] [--timeout SECONDS] [--poll-interval SECONDS]
 ```
 
 - Blocks until any named channel gets a new message past its current high-water mark (or `--since N`), prints it prefixed with `[<channel>]`, and exits 0.
@@ -77,14 +98,14 @@ channels watch <channel> [<channel>...] [--since N] [--timeout SECONDS] [--poll-
 ### List channels
 
 ```
-channels list           # active channels, most-recent first
-channels list --archived
+"$CHANNELS" list           # active channels, most-recent first
+"$CHANNELS" list --archived
 ```
 
 ### Archive
 
 ```
-channels archive <channel>
+"$CHANNELS" archive <channel>
 ```
 
 - Renames the file under flock to `<active-root>/archive/<name>-<utc-iso>.jsonl`.
@@ -98,7 +119,7 @@ channels archive <channel>
 
 ## Spawning sub-agents
 
-If you spawn sub-agents that may use channels, instruct them to invoke this skill before running any `channels` command. Without it, they'll imitate command examples from your brief and miss patterns documented only here — most importantly the `tail --follow` + `run_in_background` pattern for ambient awareness.
+If you spawn sub-agents that may use channels, instruct them to invoke this skill before running any channel command. Without it, they'll imitate command examples from your brief and miss patterns documented only here — most importantly CLI resolution and the `tail --follow` + `run_in_background` pattern for ambient awareness.
 
 ## Limits
 
