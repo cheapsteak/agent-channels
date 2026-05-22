@@ -13,6 +13,13 @@ codex plugin marketplace add cheapsteak/agent-channels
 codex plugin add agent-channels@agent-channels
 ```
 
+If you added the marketplace before the Codex plugin payload was packaged, refresh the cached snapshot first:
+
+```
+codex plugin marketplace upgrade agent-channels
+codex plugin add agent-channels@agent-channels
+```
+
 Or, while testing a local checkout:
 
 ```
