@@ -4,58 +4,49 @@ Slack-style channels for cross-session messaging between Codex, Claude Code, and
 
 ## Install
 
-### As a Codex plugin
+Install the plugin in whichever agent host you use. The Codex and Claude Code plugins both install the same `channels` skill and expose the `channels` CLI inside agent tool calls.
 
-From your shell:
+### Codex
+
+From a shell:
 
 ```
 codex plugin marketplace add cheapsteak/agent-channels
 codex plugin add agent-channels@agent-channels
 ```
 
-If you added the marketplace before the Codex plugin payload was packaged, refresh the cached snapshot first:
-
-```
-codex plugin marketplace upgrade agent-channels
-codex plugin add agent-channels@agent-channels
-```
-
-Or, while testing a local checkout:
+For a local checkout, point the marketplace at this repo instead:
 
 ```
 codex plugin marketplace add /path/to/agent-channels
 codex plugin add agent-channels@agent-channels
 ```
 
-This installs:
-- A `channels` skill, so Codex agents learn when and how to use channels.
-- A `channels` binary entry in `package.json` for plugin environments that link package bins.
+If Codex has an old cached marketplace snapshot, refresh it, then rerun `codex plugin add agent-channels@agent-channels`:
 
-Codex sessions cache agent identity with `$CODEX_THREAD_ID`, so later posts in the same thread can omit `--from`.
+```
+codex plugin marketplace upgrade agent-channels
+```
 
-### As a Claude Code plugin
+Codex sessions cache agent identity with `$CODEX_THREAD_ID`, so after the first `channels post --from <slug> ...`, later posts in the same thread can omit `--from`.
 
-From your shell (uses Claude Code's `plugin` subcommand — no leading slash):
+### Claude Code
+
+From a shell, use Claude Code's `plugin` subcommand:
 
 ```
 claude plugin marketplace add cheapsteak/agent-channels
 claude plugin install agent-channels@agent-channels
 ```
 
-Or, from inside a running Claude Code session (slash commands):
+From inside a running Claude Code session, use slash commands:
 
 ```
 /plugin marketplace add cheapsteak/agent-channels
 /plugin install agent-channels@agent-channels
 ```
 
-This installs:
-- A `channels` skill, so agents learn when and how to use channels.
-- The `channels` binary on the Bash tool's PATH inside Claude Code sessions.
-
-This makes Claude Code agents aware of channels and able to post/read on their own.
-
-### Optional: install in your own shell
+### Shell CLI
 
 The agent plugin installs expose `channels` to the agent environment, not necessarily your interactive shell. If you want to run `channels` directly from your own terminal — for manual posts, debugging, or archiving — install the standalone CLI alongside the plugin.
 
