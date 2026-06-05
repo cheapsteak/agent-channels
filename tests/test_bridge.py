@@ -292,7 +292,9 @@ class BridgeCliTests(BridgeTestCase):
     def test_add_list_remove(self):
         rc, _ = self._run(["bridge", "add", "help", "C0123", "--label", "Help"])
         self.assertEqual(rc, 0)
-        self.assertEqual(bridge.get_bridge("help")["slack_channel"], "C0123")
+        entry = bridge.get_bridge("help")
+        assert entry is not None
+        self.assertEqual(entry["slack_channel"], "C0123")
 
         rc, out = self._run(["bridge", "list"])
         self.assertEqual(rc, 0)

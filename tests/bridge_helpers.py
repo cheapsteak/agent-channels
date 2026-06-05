@@ -1,5 +1,7 @@
 # tests/bridge_helpers.py
 """Shared infrastructure for bridge tests: stub Slack server + isolated TestCase."""
+from __future__ import annotations
+
 import contextlib
 import json
 import os
@@ -10,23 +12,34 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import cast
 
 # Make the in-repo package importable without installation (mirrors bin/channels).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
+class _StubServer(HTTPServer):
+    """HTTPServer carrying test-inspection state (captured requests + mode)."""
+
+    def __init__(self, server_address, handler_class, mode: str = "ok") -> None:
+        super().__init__(server_address, handler_class)
+        self.requests: list[dict] = []
+        self.mode = mode
+
+
 class _StubSlackHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
+    def do_POST(self) -> None:
+        server = cast(_StubServer, self.server)
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b""
-        self.server.requests.append(
+        server.requests.append(
             {
                 "path": self.path,
                 "auth": self.headers.get("Authorization"),
                 "body": json.loads(raw.decode("utf-8")) if raw else None,
             }
         )
-        mode = self.server.mode
+        mode = server.mode
         if mode == "ok":
             self._json(200, {"ok": True, "ts": "1700000000.000100"})
         elif mode == "rate_limit":
@@ -47,7 +60,7 @@ class _StubSlackHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, *_args):
+    def log_message(self, format: str, *args: object) -> None:
         pass  # silence per-request logging
 
 
@@ -58,9 +71,7 @@ def stub_slack(mode="ok"):
     mode: "ok" -> {"ok": true}; "error" -> {"ok": false}; "rate_limit" -> HTTP 429.
     server.requests is a list of received requests.
     """
-    server = HTTPServer(("127.0.0.1", 0), _StubSlackHandler)
-    server.requests = []
-    server.mode = mode
+    server = _StubServer(("127.0.0.1", 0), _StubSlackHandler, mode=mode)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
