@@ -218,6 +218,24 @@ class SpawnTests(BridgeTestCase):
         # BridgeTestCase sets CHANNELS_BRIDGE_NO_SPAWN=1; must not raise/spawn.
         self.assertIsNone(bridge.spawn_worker())
 
+    def test_spawn_delivers_end_to_end(self):
+        del os.environ["CHANNELS_BRIDGE_NO_SPAWN"]
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        path = bridge.enqueue(
+            "help", "C0123",
+            {"seq": 1, "from": "a", "body": "hi", "ts": "t"},
+        )
+        import time as _t
+
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            bridge.spawn_worker()
+            deadline = _t.monotonic() + 10
+            while _t.monotonic() < deadline and path.exists():
+                _t.sleep(0.1)
+        self.assertFalse(path.exists())
+        self.assertEqual(len(server.requests), 1)
+
 
 class PostHookTests(BridgeTestCase):
     def _post(self, channel, body):
