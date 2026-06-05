@@ -86,3 +86,13 @@ def remove_bridge(name: str) -> bool:
         save_bridges(data)
         return True
     return False
+
+
+# ---------- message rendering ----------
+
+
+def render_text(channel: str, record: dict) -> str:
+    frm = record.get("from", "?")
+    seq = record.get("seq", "?")
+    body = record.get("body", "")
+    return f"`{frm}` in #{channel} (#{seq})\n{body}"

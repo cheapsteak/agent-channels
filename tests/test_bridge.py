@@ -35,5 +35,16 @@ class ConfigTests(BridgeTestCase):
         self.assertEqual(bridge.load_bridges(), {})
 
 
+class RenderTests(BridgeTestCase):
+    def test_render_text_format(self):
+        record = {"seq": 7, "from": "auth-rewrite", "body": "stuck on JWT refresh"}
+        text = bridge.render_text("help", record)
+        self.assertEqual(text, "`auth-rewrite` in #help (#7)\nstuck on JWT refresh")
+
+    def test_render_text_missing_fields(self):
+        text = bridge.render_text("help", {})
+        self.assertEqual(text, "`?` in #help (#?)\n")
+
+
 if __name__ == "__main__":
     unittest.main()
