@@ -69,6 +69,7 @@ def stub_slack(mode="ok"):
     finally:
         server.shutdown()
         thread.join(timeout=2)
+        server.server_close()
 
 
 class BridgeTestCase(unittest.TestCase):

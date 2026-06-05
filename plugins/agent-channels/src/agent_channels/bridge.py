@@ -130,6 +130,7 @@ def slack_post(token: str, slack_channel: str, text: str) -> tuple:
                 retry_after = float(raw) if raw is not None else None
             except ValueError:
                 retry_after = None
+        exc.close()
         return (False, retry_after)
     except (urllib.error.URLError, OSError, ValueError, TypeError):
         return (False, None)
