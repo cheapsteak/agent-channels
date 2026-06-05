@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from bridge_helpers import BridgeTestCase, stub_slack  # noqa: E402
 from agent_channels import bridge  # noqa: E402
+from agent_channels import main as channels_main  # noqa: E402
 
 
 class ConfigTests(BridgeTestCase):
@@ -214,6 +215,51 @@ class SpawnTests(BridgeTestCase):
     def test_no_spawn_env_is_noop(self):
         # BridgeTestCase sets CHANNELS_BRIDGE_NO_SPAWN=1; must not raise/spawn.
         self.assertIsNone(bridge.spawn_worker())
+
+
+class PostHookTests(BridgeTestCase):
+    def _post(self, channel, body):
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-1"
+        return channels_main(["post", "--from", "tester", channel, body])
+
+    def test_bridged_post_enqueues_one_job(self):
+        bridge.add_bridge("help", "C0123")
+        rc = self._post("help", "hello world")
+        self.assertEqual(rc, 0)
+        jobs = list(bridge.outbox_dir().glob("*.json"))
+        self.assertEqual(len(jobs), 1)
+        payload = _json.loads(jobs[0].read_text(encoding="utf-8"))
+        self.assertEqual(payload["slack_channel"], "C0123")
+        self.assertEqual(payload["text"], "`tester` in #help (#1)\nhello world")
+
+    def test_unbridged_post_enqueues_nothing(self):
+        rc = self._post("random", "nothing to mirror")
+        self.assertEqual(rc, 0)
+        self.assertFalse(bridge.outbox_dir().exists()
+                         and list(bridge.outbox_dir().glob("*.json")))
+
+    def test_bridge_failure_does_not_break_post(self):
+        bridge.add_bridge("help", "C0123")
+        real = bridge.enqueue
+
+        def boom(*_a, **_k):
+            raise OSError("disk full")
+
+        bridge.enqueue = boom
+        try:
+            rc = self._post("help", "still durable")
+        finally:
+            bridge.enqueue = real
+        # Post still succeeds despite the bridge failure...
+        self.assertEqual(rc, 0)
+        # ...and the message was durably written to the channel.
+        from agent_channels import channel_path, iter_messages
+
+        msgs = list(iter_messages(channel_path("help")))
+        self.assertEqual(msgs[-1]["body"], "still durable")
+        # ...and the failure was logged, not silent.
+        log = bridge.worker_log_path().read_text(encoding="utf-8")
+        self.assertIn("bridge enqueue failed", log)
 
 
 if __name__ == "__main__":

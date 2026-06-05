@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from . import bridge
+
 NEUTRAL_ROOT_NAME = ".agent-channels"
 LEGACY_ROOT_PARTS = (".claude", "channels")
 
@@ -254,6 +256,16 @@ def cmd_post(args: argparse.Namespace) -> int:
             session_data["from"] = slug
             session_data["last_post_ts"] = record["ts"]
             write_session(session_id, session_data)
+
+        mapping = bridge.get_bridge(name)
+        if mapping:
+            # A bridge must never risk the (already durable) local post:
+            # log any enqueue/spawn failure and continue to report success.
+            try:
+                bridge.enqueue(name, mapping["slack_channel"], record)
+                bridge.spawn_worker()
+            except Exception as exc:  # noqa: BLE001 - bridge is best-effort
+                bridge._log_error(f"{name} #{next_seq}: bridge enqueue failed: {exc!r}")
 
         print(f"{name} #{next_seq}")
         print(f"  read with: channels read {name} --seq {next_seq}")
