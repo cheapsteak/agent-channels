@@ -210,5 +210,11 @@ class FlushTests(BridgeTestCase):
         self.assertEqual(list(bridge.outbox_dir().glob("*.json")), [])
 
 
+class SpawnTests(BridgeTestCase):
+    def test_no_spawn_env_is_noop(self):
+        # BridgeTestCase sets CHANNELS_BRIDGE_NO_SPAWN=1; must not raise/spawn.
+        self.assertIsNone(bridge.spawn_worker())
+
+
 if __name__ == "__main__":
     unittest.main()

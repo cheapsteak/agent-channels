@@ -355,6 +355,42 @@ def flush(quiet: bool = True) -> int:
     return 1 if remaining else 0
 
 
+# ---------- detached worker spawn ----------
+
+
+def spawn_worker() -> None:
+    """Launch a fully detached `bridge flush` worker, then return immediately.
+
+    No-op when CHANNELS_BRIDGE_NO_SPAWN=1. Sets PYTHONPATH so `python -m
+    agent_channels` works from both an installed package and an in-repo
+    checkout. The worker inherits this process's env (so $SLACK_BOT_TOKEN and
+    $SLACK_API_BASE carry through).
+    """
+    if os.environ.get("CHANNELS_BRIDGE_NO_SPAWN") == "1":
+        return
+
+    pkg_parent = str(Path(__file__).resolve().parent.parent)
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        pkg_parent + (os.pathsep + existing if existing else "")
+    )
+    try:
+        devnull = subprocess.DEVNULL
+        subprocess.Popen(
+            [_sys.executable, "-m", "agent_channels", "bridge", "flush", "--quiet"],
+            stdin=devnull,
+            stdout=devnull,
+            stderr=devnull,
+            start_new_session=True,
+            close_fds=True,
+            env=env,
+        )
+    except OSError:
+        # If we can't spawn, the message stays queued; the next post retries.
+        _log_error("failed to spawn delivery worker")
+
+
 # ---------- message rendering ----------
 
 
