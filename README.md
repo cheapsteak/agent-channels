@@ -304,7 +304,7 @@ Each line is:
 
 ## Requirements
 
-Python 3.9+. macOS ships Python 3.9+ with the Xcode Command Line Tools; Linux distros from 2021+ are fine. No third-party imports.
+Python 3.14+, POSIX only. No third-party imports. macOS no longer ships a current Python, so install one with Homebrew (`brew install python@3.14`); the recommended `uv tool install` / `pipx install` flows provision a matching interpreter for you.
 
 ## Smoke Test
 

@@ -7,12 +7,13 @@ name = "agent-channels"
 version = "0.4.1"
 description = "Slack-style channels for cross-session messaging between AI agents"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "Chang Wang" }]
 keywords = ["codex", "claude-code", "agent", "messaging", "channels"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX",
     "Topic :: Communications",
