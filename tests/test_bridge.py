@@ -46,5 +46,40 @@ class RenderTests(BridgeTestCase):
         self.assertEqual(text, "`?` in #help (#?)\n")
 
 
+class SlackPostTests(BridgeTestCase):
+    def test_post_ok(self):
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            ok, retry_after = bridge.slack_post("xoxb-tok", "C0123", "hello")
+        self.assertTrue(ok)
+        self.assertIsNone(retry_after)
+        self.assertEqual(len(server.requests), 1)
+        req = server.requests[0]
+        self.assertEqual(req["path"], "/chat.postMessage")
+        self.assertEqual(req["auth"], "Bearer xoxb-tok")
+        self.assertEqual(req["body"], {"channel": "C0123", "text": "hello"})
+
+    def test_post_error_ok_false(self):
+        with stub_slack("error") as (_server, base):
+            os.environ["SLACK_API_BASE"] = base
+            ok, retry_after = bridge.slack_post("xoxb-tok", "C0123", "hello")
+        self.assertFalse(ok)
+        self.assertIsNone(retry_after)
+
+    def test_post_rate_limited_returns_retry_after(self):
+        with stub_slack("rate_limit") as (_server, base):
+            os.environ["SLACK_API_BASE"] = base
+            ok, retry_after = bridge.slack_post("xoxb-tok", "C0123", "hello")
+        self.assertFalse(ok)
+        self.assertEqual(retry_after, 1.0)
+
+    def test_post_connection_failure(self):
+        # Nothing listening on this port -> connection refused, no exception out.
+        os.environ["SLACK_API_BASE"] = "http://127.0.0.1:1"
+        ok, retry_after = bridge.slack_post("xoxb-tok", "C0123", "hello")
+        self.assertFalse(ok)
+        self.assertIsNone(retry_after)
+
+
 if __name__ == "__main__":
     unittest.main()

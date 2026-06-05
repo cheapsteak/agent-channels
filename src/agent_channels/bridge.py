@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -86,6 +88,47 @@ def remove_bridge(name: str) -> bool:
         save_bridges(data)
         return True
     return False
+
+
+# ---------- Slack HTTP ----------
+
+
+def slack_api_base() -> str:
+    return os.environ.get("SLACK_API_BASE", DEFAULT_SLACK_API_BASE)
+
+
+def slack_post(token: str, slack_channel: str, text: str) -> tuple:
+    """POST one message to chat.postMessage.
+
+    Returns (ok, retry_after_seconds). retry_after is set only on HTTP 429.
+    Never raises — network/HTTP failures return (False, ...).
+    """
+    url = slack_api_base().rstrip("/") + "/chat.postMessage"
+    try:
+        payload = json.dumps({"channel": slack_channel, "text": text}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return (bool(body.get("ok")), None)
+    except urllib.error.HTTPError as exc:
+        retry_after = None
+        if exc.code == 429:
+            raw = exc.headers.get("Retry-After")
+            try:
+                retry_after = float(raw) if raw is not None else None
+            except ValueError:
+                retry_after = None
+        return (False, retry_after)
+    except (urllib.error.URLError, OSError, ValueError, TypeError):
+        return (False, None)
 
 
 # ---------- message rendering ----------
