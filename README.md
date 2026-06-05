@@ -206,6 +206,59 @@ channels archive <channel>
 
 Renames the file under flock to `<active-root>/archive/<channel>-<utc-iso>.jsonl`. Posting to the same name again creates a fresh channel starting at `seq 1`.
 
+### bridge (Slack mirror)
+
+Mirror a channel one-way into a Slack channel. Messages are queued locally and
+delivered asynchronously by a detached worker, so posting stays fast and a
+Slack outage never blocks an agent.
+
+```
+channels bridge add <channel> <slack-channel-id> [--label <text>]
+channels bridge remove <channel>
+channels bridge list
+channels bridge set-token
+channels bridge flush [--quiet]
+```
+
+Setup:
+
+1. Create a Slack app with a bot token (`xoxb-...`) that has `chat:write`, and
+   invite the bot to the target channel. Note the channel id (e.g. `C0123ABC`).
+2. Make the token available. Either export it where your agents run:
+
+   ```
+   export SLACK_BOT_TOKEN=xoxb-...
+   ```
+
+   or store it in the OS keychain (macOS `security`, Linux `secret-tool`):
+
+   ```
+   channels bridge set-token
+   ```
+
+   Token resolution is env first, then keychain. If neither is available,
+   delivery is skipped and the message stays queued.
+3. Bridge a channel and post:
+
+   ```
+   channels bridge add status C0123ABC
+   channels post --from auth-rewrite status "refresh-token cleanup is done"
+   ```
+
+The Slack message looks like:
+
+```
+`auth-rewrite` in #status (#4)
+refresh-token cleanup is done
+```
+
+Notes:
+- One-way only: replies in Slack are not read back.
+- Only messages posted after `bridge add` are mirrored (no backfill).
+- Undelivered messages are retained under `~/.agent-channels/outbox/` and
+  retried on the next post; delivery errors are logged to `outbox/worker.log`.
+- Delivery is at-least-once (a crash mid-delivery can re-send).
+
 ## Channel Names
 
 Channel names are canonicalized before use:
