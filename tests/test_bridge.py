@@ -2,6 +2,7 @@
 import json as _json
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -113,6 +114,100 @@ class EnqueueTests(BridgeTestCase):
         # exactly one *.json job in the spool
         jobs = list(bridge.outbox_dir().glob("*.json"))
         self.assertEqual(len(jobs), 1)
+
+
+class FlushTests(BridgeTestCase):
+    def _enqueue_one(self):
+        record = {"seq": 1, "from": "a", "body": "hi", "ts": "2026-06-05T00:00:00Z"}
+        return bridge.enqueue("help", "C0123", record)
+
+    def test_flush_delivers_and_unlinks(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        path = self._enqueue_one()
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            rc = bridge.flush(quiet=True)
+        self.assertEqual(rc, 0)
+        self.assertFalse(path.exists())
+        self.assertEqual(len(server.requests), 1)
+        self.assertEqual(list(bridge.outbox_dir().glob("*.json")), [])
+
+    def test_flush_error_retains_and_logs(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        os.environ["CHANNELS_BRIDGE_MAX_ATTEMPTS"] = "1"
+        path = self._enqueue_one()
+        with stub_slack("error") as (_server, base):
+            os.environ["SLACK_API_BASE"] = base
+            rc = bridge.flush(quiet=True)
+        self.assertEqual(rc, 1)
+        self.assertTrue(path.exists())  # retained for retry
+        self.assertFalse(path.with_suffix(".json.sending").exists())
+        log = bridge.worker_log_path().read_text(encoding="utf-8")
+        self.assertIn("help.1.", log)
+
+    def test_flush_rate_limited_retains_and_logs(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        os.environ["CHANNELS_BRIDGE_MAX_ATTEMPTS"] = "1"
+        path = self._enqueue_one()
+        with stub_slack("rate_limit") as (_server, base):
+            os.environ["SLACK_API_BASE"] = base
+            rc = bridge.flush(quiet=True)
+        self.assertEqual(rc, 1)
+        self.assertTrue(path.exists())
+
+    def test_flush_no_token_leaves_queued(self):
+        path = self._enqueue_one()  # no SLACK_BOT_TOKEN, keychain disabled
+        rc = bridge.flush(quiet=True)
+        self.assertEqual(rc, 1)
+        self.assertTrue(path.exists())
+        log = bridge.worker_log_path().read_text(encoding="utf-8")
+        self.assertIn("no Slack token", log)
+
+    def test_flush_empty_is_noop(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        self.assertEqual(bridge.flush(quiet=True), 0)
+
+    def test_claim_resets_mtime_to_now(self):
+        # A long-queued job, once claimed, must have a fresh (claim-time) mtime
+        # so a concurrent worker's _reclaim_stale won't steal it mid-delivery.
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        path = self._enqueue_one()
+        old = time.time() - 9999
+        os.utime(path, (old, old))
+        seen = {}
+        real = bridge.slack_post
+
+        def spy(token, ch, text):
+            sending = list(bridge.outbox_dir().glob("*.sending"))
+            seen["mtime"] = sending[0].stat().st_mtime if sending else None
+            return (True, None)
+
+        bridge.slack_post = spy
+        try:
+            bridge.flush(quiet=True)
+        finally:
+            bridge.slack_post = real
+        self.assertIsNotNone(seen["mtime"])
+        self.assertGreater(seen["mtime"], time.time() - 60)
+
+    def test_concurrent_claim_delivers_once(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        for seq in range(1, 6):
+            bridge.enqueue(
+                "help", "C0123",
+                {"seq": seq, "from": "a", "body": str(seq), "ts": "t"},
+            )
+        import threading
+
+        # Two workers share one stub server; every job must be delivered
+        # exactly once across both (claim-by-rename prevents double-delivery).
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            t1 = threading.Thread(target=lambda: bridge.flush(quiet=True))
+            t2 = threading.Thread(target=lambda: bridge.flush(quiet=True))
+            t1.start(); t2.start(); t1.join(); t2.join()
+            self.assertEqual(len(server.requests), 5)
+        self.assertEqual(list(bridge.outbox_dir().glob("*.json")), [])
 
 
 if __name__ == "__main__":

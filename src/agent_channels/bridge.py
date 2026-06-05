@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys as _sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -236,6 +237,122 @@ def enqueue(channel: str, slack_channel: str, record: dict) -> Path:
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(tmp, final)
     return final
+
+
+# ---------- flush / drain ----------
+
+SENDING_SUFFIX = ".sending"
+
+
+def _max_attempts() -> int:
+    try:
+        return max(1, int(os.environ.get("CHANNELS_BRIDGE_MAX_ATTEMPTS", "")))
+    except ValueError:
+        return DEFAULT_MAX_ATTEMPTS
+
+
+def _backoff() -> float:
+    try:
+        return max(0.0, float(os.environ.get("CHANNELS_BRIDGE_BACKOFF", "")))
+    except ValueError:
+        return DEFAULT_BACKOFF_S
+
+
+def _log_error(msg: str) -> None:
+    from agent_channels import now_iso
+
+    try:
+        _ensure_outbox()
+        with worker_log_path().open("a", encoding="utf-8") as f:
+            f.write(f"{now_iso()} {msg}\n")
+    except OSError:
+        pass
+
+
+def _reclaim_stale(od: Path) -> None:
+    """Return orphaned *.sending files (crashed worker) to *.json."""
+    now = time.time()
+    for s in od.glob("*" + SENDING_SUFFIX):
+        try:
+            if now - s.stat().st_mtime < RECLAIM_TIMEOUT_S:
+                continue
+        except OSError:
+            continue
+        target = s.with_suffix("")  # strip ".sending" -> "....json"
+        try:
+            os.rename(s, target)
+        except OSError:
+            pass
+
+
+def _deliver(token: str, payload: dict) -> bool:
+    """Attempt delivery with bounded retries + backoff. Returns ok."""
+    attempts = _max_attempts()
+    backoff = _backoff()
+    for i in range(attempts):
+        ok, retry_after = slack_post(
+            token, payload["slack_channel"], payload["text"]
+        )
+        if ok:
+            return True
+        if i == attempts - 1:
+            break
+        delay = retry_after if retry_after is not None else backoff * (i + 1)
+        time.sleep(min(delay, 30.0))
+    return False
+
+
+def flush(quiet: bool = True) -> int:
+    """Drain the outbox to Slack. Returns 0 if nothing remains, else 1."""
+    od = outbox_dir()
+    if not od.exists():
+        return 0
+    _reclaim_stale(od)
+    jobs = sorted(od.glob("*.json"))
+    if not jobs:
+        return 0
+
+    token_info = resolve_token()
+    if token_info is None:
+        _log_error(f"no Slack token; leaving {len(jobs)} message(s) queued")
+        if not quiet:
+            print("channels: no Slack token (set $SLACK_BOT_TOKEN or run "
+                  "`channels bridge set-token`)", file=_sys.stderr)
+        return 1
+    token = token_info[0]
+
+    remaining = 0
+    for job in jobs:
+        sending = Path(str(job) + SENDING_SUFFIX)
+        try:
+            os.rename(job, sending)  # claim; loser of a race raises/ skips
+            os.utime(sending, None)  # reset mtime to claim time so the reclaim
+                                     # window is measured from ownership, not enqueue
+        except OSError:
+            continue
+        try:
+            payload = json.loads(sending.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _log_error(f"{sending.name}: unreadable spool file; dropping")
+            try:
+                sending.unlink()
+            except OSError:
+                pass
+            continue
+        if _deliver(token, payload):
+            try:
+                sending.unlink()
+            except OSError:
+                pass
+        else:
+            remaining += 1
+            _log_error(f"{job.name}: delivery failed; retained for retry")
+            try:
+                os.rename(sending, job)  # release for a later worker
+            except OSError:
+                _log_error(f"{job.name}: could not release claim back to .json")
+
+    return 1 if remaining else 0
 
 
 # ---------- message rendering ----------

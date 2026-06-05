@@ -866,8 +866,8 @@ def _backoff() -> float:
 def _log_error(msg: str) -> None:
     from agent_channels import now_iso
 
-    _ensure_outbox()
     try:
+        _ensure_outbox()
         with worker_log_path().open("a", encoding="utf-8") as f:
             f.write(f"{now_iso()} {msg}\n")
     except OSError:
@@ -931,6 +931,8 @@ def flush(quiet: bool = True) -> int:
         sending = Path(str(job) + SENDING_SUFFIX)
         try:
             os.rename(job, sending)  # claim; loser of a race raises/ skips
+            os.utime(sending, None)  # reset mtime to claim time so the reclaim
+                                     # window is measured from ownership, not enqueue
         except OSError:
             continue
         try:
@@ -953,7 +955,7 @@ def flush(quiet: bool = True) -> int:
             try:
                 os.rename(sending, job)  # release for a later worker
             except OSError:
-                pass
+                _log_error(f"{job.name}: could not release claim back to .json")
 
     return 1 if remaining else 0
 ```
