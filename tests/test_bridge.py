@@ -1,4 +1,5 @@
 # tests/test_bridge.py
+import json as _json
 import os
 import sys
 import unittest
@@ -93,6 +94,25 @@ class TokenTests(BridgeTestCase):
     def test_keychain_disabled_get_returns_none(self):
         self.assertIsNone(bridge.keychain_get())
         self.assertFalse(bridge.keychain_available())
+
+
+class EnqueueTests(BridgeTestCase):
+    def test_enqueue_writes_one_spool_file(self):
+        record = {"seq": 7, "from": "auth-rewrite", "body": "stuck",
+                  "ts": "2026-06-05T00:00:00Z"}
+        path = bridge.enqueue("help", "C0123", record)
+        self.assertTrue(path.exists())
+        self.assertTrue(path.name.startswith("help.7."))
+        self.assertTrue(path.name.endswith(".json"))
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["slack_channel"], "C0123")
+        self.assertEqual(payload["channel"], "help")
+        self.assertEqual(payload["seq"], 7)
+        self.assertEqual(payload["text"], "`auth-rewrite` in #help (#7)\nstuck")
+        self.assertIn("enqueued_ts", payload)
+        # exactly one *.json job in the spool
+        jobs = list(bridge.outbox_dir().glob("*.json"))
+        self.assertEqual(len(jobs), 1)
 
 
 if __name__ == "__main__":

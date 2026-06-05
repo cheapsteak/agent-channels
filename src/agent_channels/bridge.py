@@ -206,6 +206,38 @@ def resolve_token() -> Optional[tuple]:
     return None
 
 
+# ---------- outbox spool ----------
+
+
+def _ensure_outbox() -> Path:
+    od = outbox_dir()
+    od.mkdir(parents=True, exist_ok=True)
+    return od
+
+
+def _spool_name(channel: str, seq) -> str:
+    return f"{channel}.{seq}.{os.getpid()}.json"
+
+
+def enqueue(channel: str, slack_channel: str, record: dict) -> Path:
+    """Write one delivery job to the outbox via tmp + atomic rename."""
+    from agent_channels import now_iso
+
+    od = _ensure_outbox()
+    payload = {
+        "slack_channel": slack_channel,
+        "text": render_text(channel, record),
+        "channel": channel,
+        "seq": record.get("seq"),
+        "enqueued_ts": now_iso(),
+    }
+    final = od / _spool_name(channel, record.get("seq"))
+    tmp = final.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(tmp, final)
+    return final
+
+
 # ---------- message rendering ----------
 
 
