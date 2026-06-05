@@ -1,4 +1,6 @@
 # tests/test_bridge.py
+import contextlib as _ctx
+import io
 import json as _json
 import os
 import sys
@@ -260,6 +262,49 @@ class PostHookTests(BridgeTestCase):
         # ...and the failure was logged, not silent.
         log = bridge.worker_log_path().read_text(encoding="utf-8")
         self.assertIn("bridge enqueue failed", log)
+
+
+class BridgeCliTests(BridgeTestCase):
+    def _run(self, argv):
+        out = io.StringIO()
+        with _ctx.redirect_stdout(out):
+            rc = channels_main(argv)
+        return rc, out.getvalue()
+
+    def test_add_list_remove(self):
+        rc, _ = self._run(["bridge", "add", "help", "C0123", "--label", "Help"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(bridge.get_bridge("help")["slack_channel"], "C0123")
+
+        rc, out = self._run(["bridge", "list"])
+        self.assertEqual(rc, 0)
+        self.assertIn("help", out)
+        self.assertIn("C0123", out)
+        self.assertIn("MISSING", out)  # no token in test env
+
+        rc, _ = self._run(["bridge", "remove", "help"])
+        self.assertEqual(rc, 0)
+        self.assertIsNone(bridge.get_bridge("help"))
+
+    def test_list_shows_env_token_status_without_value(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb-secret"
+        self._run(["bridge", "add", "help", "C0123"])
+        _rc, out = self._run(["bridge", "list"])
+        self.assertIn("set (env)", out)
+        self.assertNotIn("xoxb-secret", out)
+
+    def test_flush_subcommand_delivers(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        bridge.enqueue("help", "C0123", {"seq": 1, "from": "a", "body": "x", "ts": "t"})
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            rc, _ = self._run(["bridge", "flush"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(server.requests), 1)
+
+    def test_add_canonicalizes_channel_name(self):
+        self._run(["bridge", "add", "#Help", "C0123"])
+        self.assertIsNotNone(bridge.get_bridge("help"))
 
 
 if __name__ == "__main__":

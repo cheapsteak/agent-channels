@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, NoReturn, Optional
 
 from . import bridge
 
@@ -33,7 +33,7 @@ RESERVED_SUFFIX = "_archive"
 # ---------- errors / exits ----------
 
 
-def die(msg: str, code: int = 1) -> None:
+def die(msg: str, code: int = 1) -> NoReturn:
     print(f"channels: {msg}", file=sys.stderr)
     sys.exit(code)
 
@@ -567,6 +567,66 @@ def cmd_archive(args: argparse.Namespace) -> int:
             os.close(lock_fd)
 
 
+# ---------- BRIDGE ----------
+
+
+def cmd_bridge_add(args: argparse.Namespace) -> int:
+    name = canonical_name(args.name)
+    bridge.add_bridge(name, args.slack_channel, label=args.label or "")
+    print(f"bridged {name} -> {args.slack_channel}")
+    return 0
+
+
+def cmd_bridge_remove(args: argparse.Namespace) -> int:
+    name = canonical_name(args.name)
+    if bridge.remove_bridge(name):
+        print(f"removed bridge for {name}")
+        return 0
+    die(f"no bridge for channel {name!r}")
+
+
+def cmd_bridge_list(args: argparse.Namespace) -> int:
+    bridges = bridge.load_bridges()
+    token_info = bridge.resolve_token()
+    if token_info is None:
+        print("token: MISSING (set $SLACK_BOT_TOKEN or run `channels bridge set-token`)")
+    else:
+        print(f"token: set ({token_info[1]})")
+    if not bridges:
+        print("(no bridges)")
+        return 0
+    print(f"{'CHANNEL':<24} {'SLACK':<16} LABEL")
+    for name in sorted(bridges):
+        entry = bridges[name]
+        slack = entry.get("slack_channel", "?")
+        label = entry.get("label", "")
+        print(f"{name:<24} {slack:<16} {label}")
+    return 0
+
+
+def cmd_bridge_set_token(args: argparse.Namespace) -> int:
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token:
+        import getpass
+
+        token = getpass.getpass("Slack bot token (xoxb-...): ").strip()
+    if not token:
+        die("no token provided")
+    if not bridge.keychain_available():
+        die(
+            "OS keychain unavailable; export SLACK_BOT_TOKEN in the environment "
+            "that runs posts instead (macOS needs `security`, Linux needs `secret-tool`)"
+        )
+    if bridge.keychain_set(token):
+        print("stored Slack bot token in the OS keychain")
+        return 0
+    die("failed to store token in the keychain")
+
+
+def cmd_bridge_flush(args: argparse.Namespace) -> int:
+    return bridge.flush(quiet=args.quiet)
+
+
 # ---------- argparse ----------
 
 
@@ -655,6 +715,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_arch = sub.add_parser("archive", help="archive a channel")
     p_arch.add_argument("name")
     p_arch.set_defaults(func=cmd_archive)
+
+    p_bridge = sub.add_parser("bridge", help="manage one-way Slack mirrors")
+    bsub = p_bridge.add_subparsers(dest="bridge_cmd", required=True)
+
+    b_add = bsub.add_parser("add", help="mirror a channel to a Slack channel")
+    b_add.add_argument("name")
+    b_add.add_argument("slack_channel", help="Slack channel id, e.g. C0123ABC")
+    b_add.add_argument("--label", default=None, help="optional human label")
+    b_add.set_defaults(func=cmd_bridge_add)
+
+    b_rm = bsub.add_parser("remove", help="remove a channel's Slack mirror")
+    b_rm.add_argument("name")
+    b_rm.set_defaults(func=cmd_bridge_remove)
+
+    b_ls = bsub.add_parser("list", help="list Slack mirrors and token status")
+    b_ls.set_defaults(func=cmd_bridge_list)
+
+    b_tok = bsub.add_parser("set-token", help="store the bot token in the OS keychain")
+    b_tok.set_defaults(func=cmd_bridge_set_token)
+
+    b_flush = bsub.add_parser("flush", help="drain queued messages to Slack now")
+    b_flush.add_argument("--quiet", action="store_true", help="suppress stderr notices")
+    b_flush.set_defaults(func=cmd_bridge_flush)
 
     return p
 
