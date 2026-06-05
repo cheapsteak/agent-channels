@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import sys as _sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -129,6 +132,78 @@ def slack_post(token: str, slack_channel: str, text: str) -> tuple:
         return (False, retry_after)
     except (urllib.error.URLError, OSError, ValueError, TypeError):
         return (False, None)
+
+
+# ---------- token resolution ----------
+
+
+def _keychain_disabled() -> bool:
+    return os.environ.get("CHANNELS_BRIDGE_NO_KEYCHAIN") == "1"
+
+
+def _keychain_tool() -> Optional[str]:
+    """Return the keychain CLI for this platform, or None if unavailable."""
+    if _keychain_disabled():
+        return None
+    if _sys.platform == "darwin":
+        return shutil.which("security")
+    if _sys.platform.startswith("linux"):
+        return shutil.which("secret-tool")
+    return None
+
+
+def keychain_available() -> bool:
+    return _keychain_tool() is not None
+
+
+def keychain_get() -> Optional[str]:
+    tool = _keychain_tool()
+    if not tool:
+        return None
+    if _sys.platform == "darwin":
+        cmd = [tool, "find-generic-password", "-s", KEYCHAIN_SERVICE,
+               "-a", KEYCHAIN_ACCOUNT, "-w"]
+    else:  # linux secret-tool
+        cmd = [tool, "lookup", "service", KEYCHAIN_SERVICE,
+               "account", KEYCHAIN_ACCOUNT]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    token = proc.stdout.strip()
+    return token or None
+
+
+def keychain_set(token: str) -> bool:
+    tool = _keychain_tool()
+    if not tool:
+        return False
+    try:
+        if _sys.platform == "darwin":
+            cmd = [tool, "add-generic-password", "-U", "-s", KEYCHAIN_SERVICE,
+                   "-a", KEYCHAIN_ACCOUNT, "-w", token]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        else:  # linux secret-tool reads the secret from stdin
+            cmd = [tool, "store", "--label", "agent-channels Slack bot token",
+                   "service", KEYCHAIN_SERVICE, "account", KEYCHAIN_ACCOUNT]
+            proc = subprocess.run(cmd, input=token, capture_output=True,
+                                  text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def resolve_token() -> Optional[tuple]:
+    """Return (token, source) with source in {"env","keychain"}, or None."""
+    env = os.environ.get("SLACK_BOT_TOKEN")
+    if env:
+        return (env, "env")
+    kc = keychain_get()
+    if kc:
+        return (kc, "keychain")
+    return None
 
 
 # ---------- message rendering ----------

@@ -81,5 +81,19 @@ class SlackPostTests(BridgeTestCase):
         self.assertIsNone(retry_after)
 
 
+class TokenTests(BridgeTestCase):
+    def test_env_token_wins(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb-env"
+        self.assertEqual(bridge.resolve_token(), ("xoxb-env", "env"))
+
+    def test_missing_token_returns_none(self):
+        # NO_KEYCHAIN is set by BridgeTestCase, so no keychain lookup happens.
+        self.assertIsNone(bridge.resolve_token())
+
+    def test_keychain_disabled_get_returns_none(self):
+        self.assertIsNone(bridge.keychain_get())
+        self.assertFalse(bridge.keychain_available())
+
+
 if __name__ == "__main__":
     unittest.main()
