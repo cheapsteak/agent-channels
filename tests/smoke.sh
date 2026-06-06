@@ -244,5 +244,66 @@ test -f "$HOME/.agent-channels/sessions/codex-wins.json" \
 test ! -f "$HOME/.agent-channels/sessions/claude-loses.json" \
     || fail "Claude session should not be used when Codex thread id is set"
 
+# ---------- slack bridge ----------
+
+export HOME="$TMP/bridge"
+mkdir -p "$HOME"
+unset CODEX_THREAD_ID
+export CLAUDE_CODE_SESSION_ID="bridge-session-1"
+export SLACK_BOT_TOKEN="xoxb-smoke"
+export CHANNELS_BRIDGE_NO_KEYCHAIN=1
+export CHANNELS_BRIDGE_NO_SPAWN=1
+
+step "bridge: stub Slack server captures a delivered message"
+STUB_OUT="$TMP/stub_requests.log"
+python3 - "$STUB_OUT" <<'PYSTUB' &
+import sys, json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+out_path = sys.argv[1]
+
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(n) if n else b""
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write(raw.decode("utf-8") + "\n")
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+
+srv = HTTPServer(("127.0.0.1", 0), H)
+with open(out_path + ".port", "w") as f:
+    f.write(str(srv.server_address[1]))
+srv.serve_forever()
+PYSTUB
+STUB_PID=$!
+
+# wait for the stub to report its port
+for _ in $(seq 1 50); do
+    [ -f "$STUB_OUT.port" ] && break
+    sleep 0.1
+done
+[ -f "$STUB_OUT.port" ] || fail "stub Slack server did not start"
+export SLACK_API_BASE="http://127.0.0.1:$(cat "$STUB_OUT.port")"
+
+"$CHANNELS" bridge add slacktest C0SMOKE >/dev/null || fail "bridge add errored"
+"$CHANNELS" bridge list | grep -q 'slacktest' || fail "bridge list missing entry"
+"$CHANNELS" post --from smoke-bridge slacktest 'mirror me' >/dev/null \
+    || fail "bridged post errored"
+"$CHANNELS" bridge flush --quiet || fail "bridge flush errored"
+
+kill "$STUB_PID" 2>/dev/null || true
+wait "$STUB_PID" 2>/dev/null || true
+
+grep -q 'mirror me' "$STUB_OUT" || fail "Slack stub did not receive the message"
+grep -q '"channel": "C0SMOKE"' "$STUB_OUT" || fail "Slack stub missing channel id"
+
+unset SLACK_BOT_TOKEN SLACK_API_BASE CHANNELS_BRIDGE_NO_KEYCHAIN CHANNELS_BRIDGE_NO_SPAWN
+
 echo
 echo "PASS"

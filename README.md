@@ -206,6 +206,108 @@ channels archive <channel>
 
 Renames the file under flock to `<active-root>/archive/<channel>-<utc-iso>.jsonl`. Posting to the same name again creates a fresh channel starting at `seq 1`.
 
+### bridge (Slack mirror)
+
+Mirror a channel one-way into a Slack channel. Messages are queued locally and
+delivered asynchronously by a detached worker, so posting stays fast and a
+Slack outage never blocks an agent.
+
+```
+channels bridge add <channel> <slack-channel-id> [--label <text>]
+channels bridge remove <channel>
+channels bridge list
+channels bridge status
+channels bridge set-token
+channels bridge flush [--quiet] [--follow [--interval <seconds>]]
+```
+
+Setup:
+
+1. Create a Slack app with a bot token (`xoxb-...`) that has `chat:write`, and
+   invite the bot to the target channel. Note the channel id (e.g. `C0123ABC`).
+2. Make the token available. Either export it where your agents run:
+
+   ```
+   export SLACK_BOT_TOKEN=xoxb-...
+   ```
+
+   or store it in the OS keychain (macOS `security`, Linux `secret-tool`):
+
+   ```
+   channels bridge set-token
+   ```
+
+   Token resolution is env first, then keychain. If neither is available,
+   delivery is skipped and the message stays queued.
+3. Bridge a channel and post:
+
+   ```
+   channels bridge add status C0123ABC
+   channels post --from auth-rewrite status "refresh-token cleanup is done"
+   ```
+
+The Slack message looks like:
+
+```
+`auth-rewrite` in #status (#4)
+refresh-token cleanup is done
+```
+
+Check delivery health any time:
+
+```
+channels bridge status
+```
+
+prints the resolvable token source, the queue depth (`queued` waiting +
+`in-flight` being delivered), and the most recent `worker.log` error — so a
+stuck bridge (bad token, bot not in channel) is visible without grepping files.
+
+Delivery is **post-driven** by default: each post spawns a short-lived worker
+that drains the queue. If posting stops while messages are still queued (Slack
+was down, an agent finished its run), nothing retries them until the next post.
+For unattended or long-quiet setups, run a **sweeper** that keeps draining on
+its own:
+
+```
+channels bridge flush --follow            # foreground, Ctrl-C to stop
+channels bridge flush --follow --interval 30
+```
+
+To keep one running persistently, supervise it. On macOS with `launchd`
+(`~/Library/LaunchAgents/com.agent-channels.bridge.plist`, then
+`launchctl load` it):
+
+```xml
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.agent-channels.bridge</string>
+  <key>ProgramArguments</key>
+  <array><string>channels</string><string>bridge</string><string>flush</string><string>--follow</string></array>
+  <key>EnvironmentVariables</key><dict><key>SLACK_BOT_TOKEN</key><string>xoxb-...</string></dict>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+```
+
+On Linux, a systemd user service (`Restart=always`) or simply
+`nohup channels bridge flush --follow &` works. The simplest coarse option,
+if you don't want a daemon, is a cron one-shot:
+
+```
+*/5 * * * * SLACK_BOT_TOKEN=xoxb-... channels bridge flush --quiet
+```
+
+Running multiple sweepers (or a sweeper alongside post-driven workers) is safe:
+a process-wide flock means only one drains at a time; the rest exit immediately.
+
+Notes:
+- One-way only: replies in Slack are not read back.
+- Only messages posted after `bridge add` are mirrored (no backfill).
+- Undelivered messages are retained under `~/.agent-channels/outbox/` and
+  retried on the next post (or by a `--follow` sweeper); delivery errors are
+  logged to `outbox/worker.log` and summarized by `bridge status`.
+- Delivery is at-least-once (a crash mid-delivery can re-send).
+- Malformed/corrupt queue files are dropped (and logged), never retried.
+
 ## Channel Names
 
 Channel names are canonicalized before use:
@@ -251,7 +353,7 @@ Each line is:
 
 ## Requirements
 
-Python 3.9+. macOS ships Python 3.9+ with the Xcode Command Line Tools; Linux distros from 2021+ are fine. No third-party imports.
+Python 3.14+, POSIX only. No third-party imports. macOS no longer ships a current Python, so install one with Homebrew (`brew install python@3.14`); the recommended `uv tool install` / `pipx install` flows provision a matching interpreter for you.
 
 ## Smoke Test
 
