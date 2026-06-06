@@ -256,25 +256,26 @@ def cmd_post(args: argparse.Namespace) -> int:
             session_data["from"] = slug
             session_data["last_post_ts"] = record["ts"]
             write_session(session_id, session_data)
-
-        mapping = bridge.get_bridge(name)
-        if mapping:
-            # A bridge must never risk the (already durable) local post:
-            # log any enqueue/spawn failure and continue to report success.
-            try:
-                bridge.enqueue(name, mapping["slack_channel"], record)
-                bridge.spawn_worker()
-            except Exception as exc:  # noqa: BLE001 - bridge is best-effort
-                bridge._log_error(f"{name} #{next_seq}: bridge enqueue failed: {exc!r}")
-
-        print(f"{name} #{next_seq}")
-        print(f"  read with: channels read {name} --seq {next_seq}")
-        return 0
     finally:
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
         finally:
             os.close(lock_fd)
+
+    # Channel lock released. Bridge side effects (a write into outbox/ plus a
+    # process spawn) run here, outside the lock, so they never extend the
+    # channel's exclusive-lock window or risk the already-durable local post.
+    mapping = bridge.get_bridge(name)
+    if mapping:
+        try:
+            bridge.enqueue(name, mapping["slack_channel"], record)
+            bridge.spawn_worker()
+        except Exception as exc:  # noqa: BLE001 - bridge is best-effort
+            bridge._log_error(f"{name} #{next_seq}: bridge enqueue failed: {exc!r}")
+
+    print(f"{name} #{next_seq}")
+    print(f"  read with: channels read {name} --seq {next_seq}")
+    return 0
 
 
 # ---------- READ helpers ----------

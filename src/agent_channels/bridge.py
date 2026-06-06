@@ -6,6 +6,8 @@ the package lazily (inside functions) to avoid an import cycle with __init__.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -15,11 +17,13 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional, TypeGuard
 
 BRIDGES_FILE = "bridges.json"
+BRIDGES_LOCK = "bridges.lock"
 OUTBOX_DIRNAME = "outbox"
 WORKER_LOG = "worker.log"
+FLUSH_LOCK = ".flush.lock"
 
 KEYCHAIN_SERVICE = "agent-channels"
 KEYCHAIN_ACCOUNT = "slack-bot-token"
@@ -69,9 +73,28 @@ def save_bridges(data: dict) -> None:
     root = channels_root()
     root.mkdir(parents=True, exist_ok=True)
     p = bridges_path()
-    tmp = p.with_suffix(".json.tmp")
+    # PID-namespaced tmp so concurrent writers never share a scratch file.
+    tmp = p.with_name(f"{BRIDGES_FILE}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
     os.replace(tmp, p)
+
+
+@contextlib.contextmanager
+def _bridges_lock() -> Iterator[None]:
+    """Serialize bridges.json read-modify-write across processes (flock)."""
+    from agent_channels import channels_root
+
+    root = channels_root()
+    root.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(root / BRIDGES_LOCK), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def get_bridge(name: str) -> Optional[dict]:
@@ -80,18 +103,20 @@ def get_bridge(name: str) -> Optional[dict]:
 
 
 def add_bridge(name: str, slack_channel: str, label: str = "") -> None:
-    data = load_bridges()
-    data[name] = {"slack_channel": slack_channel, "label": label}
-    save_bridges(data)
+    with _bridges_lock():
+        data = load_bridges()
+        data[name] = {"slack_channel": slack_channel, "label": label}
+        save_bridges(data)
 
 
 def remove_bridge(name: str) -> bool:
-    data = load_bridges()
-    if name in data:
-        del data[name]
-        save_bridges(data)
-        return True
-    return False
+    with _bridges_lock():
+        data = load_bridges()
+        if name in data:
+            del data[name]
+            save_bridges(data)
+            return True
+        return False
 
 
 # ---------- Slack HTTP ----------
@@ -303,55 +328,104 @@ def _deliver(token: str, payload: dict) -> bool:
     return False
 
 
+def _flush_lock_path() -> Path:
+    return outbox_dir() / FLUSH_LOCK
+
+
+def _valid_payload(payload: object) -> TypeGuard[dict]:
+    """A spool payload safe to deliver: a dict with string channel + text."""
+    return (
+        isinstance(payload, dict)
+        and isinstance(payload.get("slack_channel"), str)
+        and isinstance(payload.get("text"), str)
+    )
+
+
 def flush(quiet: bool = True) -> int:
-    """Drain the outbox to Slack. Returns 0 if nothing remains, else 1."""
+    """Drain the outbox to Slack. Returns 0 if nothing remains, else 1.
+
+    Singleton: a non-blocking flock coalesces a burst of posts into one
+    delivering worker. Extra workers find the lock held and exit immediately;
+    claim-by-rename remains the correctness backstop.
+    """
     od = outbox_dir()
     if not od.exists():
         return 0
+    od.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(str(_flush_lock_path()), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0  # another worker is already draining
+        return _drain(od, quiet)
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+
+def _drain(od: Path, quiet: bool) -> int:
     _reclaim_stale(od)
-    jobs = sorted(od.glob("*.json"))
-    if not jobs:
+    if not any(od.glob("*.json")):
         return 0
 
     token_info = resolve_token()
     if token_info is None:
-        _log_error(f"no Slack token; leaving {len(jobs)} message(s) queued")
+        pending = sorted(od.glob("*.json"))
+        _log_error(f"no Slack token; leaving {len(pending)} message(s) queued")
         if not quiet:
             print("channels: no Slack token (set $SLACK_BOT_TOKEN or run "
                   "`channels bridge set-token`)", file=_sys.stderr)
         return 1
     token = token_info[0]
 
+    # Drain until empty (we hold the singleton lock): a job enqueued mid-drain
+    # must be delivered by this worker, not left for the next post. `attempted`
+    # stops us from re-trying a job we already retained-on-failure this pass.
+    attempted: set = set()
     remaining = 0
-    for job in jobs:
-        sending = Path(str(job) + SENDING_SUFFIX)
-        try:
-            os.rename(job, sending)  # claim; loser of a race raises/ skips
-            os.utime(sending, None)  # reset mtime to claim time so the reclaim
-                                     # window is measured from ownership, not enqueue
-        except OSError:
-            continue
-        try:
-            payload = json.loads(sending.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            _log_error(f"{sending.name}: unreadable spool file; dropping")
+    while True:
+        jobs = [j for j in sorted(od.glob("*.json")) if j not in attempted]
+        if not jobs:
+            break
+        for job in jobs:
+            attempted.add(job)
+            sending = Path(str(job) + SENDING_SUFFIX)
             try:
-                sending.unlink()
+                os.rename(job, sending)  # claim
+                os.utime(sending, None)  # reset mtime to claim time so the
+                                         # reclaim window runs from ownership
             except OSError:
-                pass
-            continue
-        if _deliver(token, payload):
+                continue
             try:
-                sending.unlink()
-            except OSError:
-                pass
-        else:
-            remaining += 1
-            _log_error(f"{job.name}: delivery failed; retained for retry")
-            try:
-                os.rename(sending, job)  # release for a later worker
-            except OSError:
-                _log_error(f"{job.name}: could not release claim back to .json")
+                payload = json.loads(sending.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = None
+            if not _valid_payload(payload):
+                # Drop a corrupt/malformed job rather than let it crash (and
+                # wedge) every future worker via a KeyError in _deliver.
+                _log_error(
+                    f"{sending.name}: unreadable or malformed spool file; dropping"
+                )
+                try:
+                    sending.unlink()
+                except OSError:
+                    pass
+                continue
+            if _deliver(token, payload):
+                try:
+                    sending.unlink()
+                except OSError:
+                    pass
+            else:
+                remaining += 1
+                _log_error(f"{job.name}: delivery failed; retained for retry")
+                try:
+                    os.rename(sending, job)  # release for a later worker
+                except OSError:
+                    _log_error(f"{job.name}: could not release claim back to .json")
 
     return 1 if remaining else 0
 

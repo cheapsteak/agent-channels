@@ -39,6 +39,27 @@ class ConfigTests(BridgeTestCase):
         bridge.bridges_path().write_text("{not json", encoding="utf-8")
         self.assertEqual(bridge.load_bridges(), {})
 
+    def test_concurrent_add_bridge_no_lost_update(self):
+        # add_bridge serializes its read-modify-write under a lock, so parallel
+        # adds must not clobber each other (all 20 mappings survive).
+        import threading
+
+        errors = []
+
+        def add(i):
+            try:
+                bridge.add_bridge(f"chan{i}", f"C{i}")
+            except Exception as exc:  # pragma: no cover
+                errors.append(exc)
+
+        threads = [threading.Thread(target=add, args=(i,)) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(bridge.load_bridges()), 20)
+
 
 class RenderTests(BridgeTestCase):
     def test_render_text_format(self):
@@ -211,6 +232,71 @@ class FlushTests(BridgeTestCase):
             t1.start(); t2.start(); t1.join(); t2.join()
             self.assertEqual(len(server.requests), 5)
         self.assertEqual(list(bridge.outbox_dir().glob("*.json")), [])
+
+    def test_flush_malformed_payload_dropped_without_crash(self):
+        # A valid-JSON-but-wrong-shape spool file must be dropped, not crash the
+        # worker (which would strand it and re-crash every future flush).
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        good = self._enqueue_one()
+        bad = bridge.outbox_dir() / "help.999.1.json"
+        bad.write_text('{"missing": "required keys"}', encoding="utf-8")
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            rc = bridge.flush(quiet=True)
+        self.assertEqual(rc, 0)
+        self.assertFalse(bad.exists())          # malformed -> dropped
+        self.assertFalse(good.exists())         # valid -> delivered + unlinked
+        self.assertEqual(len(server.requests), 1)
+        log = bridge.worker_log_path().read_text(encoding="utf-8")
+        self.assertIn("malformed", log)
+
+    def test_flush_drains_jobs_enqueued_mid_drain(self):
+        # The singleton worker must keep draining jobs that appear while it is
+        # mid-flush, not leave them for the next post.
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        self._enqueue_one()  # seq 1
+        real = bridge.slack_post
+        state = {"added": False, "calls": 0}
+
+        def spy(token, channel, text):
+            state["calls"] += 1
+            if not state["added"]:
+                state["added"] = True
+                bridge.enqueue(
+                    "help", "C0123",
+                    {"seq": 2, "from": "a", "body": "two", "ts": "t"},
+                )
+            return (True, None)
+
+        bridge.slack_post = spy
+        try:
+            rc = bridge.flush(quiet=True)
+        finally:
+            bridge.slack_post = real
+        self.assertEqual(rc, 0)
+        self.assertEqual(state["calls"], 2)  # both the original and the new job
+        self.assertEqual(list(bridge.outbox_dir().glob("*.json")), [])
+
+    def test_flush_singleton_skips_when_lock_held(self):
+        # While another worker holds the flush lock, flush() must no-op (return
+        # 0) and leave the spool untouched rather than spawn a parallel drain.
+        import fcntl as _fcntl
+
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        path = self._enqueue_one()
+        bridge._ensure_outbox()
+        held = os.open(str(bridge._flush_lock_path()), os.O_RDWR | os.O_CREAT, 0o644)
+        _fcntl.flock(held, _fcntl.LOCK_EX)
+        try:
+            with stub_slack("ok") as (server, base):
+                os.environ["SLACK_API_BASE"] = base
+                rc = bridge.flush(quiet=True)
+            self.assertEqual(rc, 0)
+            self.assertTrue(path.exists())      # not drained
+            self.assertEqual(len(server.requests), 0)
+        finally:
+            _fcntl.flock(held, _fcntl.LOCK_UN)
+            os.close(held)
 
 
 class SpawnTests(BridgeTestCase):
