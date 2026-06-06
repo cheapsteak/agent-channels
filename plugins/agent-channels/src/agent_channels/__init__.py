@@ -624,7 +624,22 @@ def cmd_bridge_set_token(args: argparse.Namespace) -> int:
     die("failed to store token in the keychain")
 
 
+def cmd_bridge_status(args: argparse.Namespace) -> int:
+    token_info = bridge.resolve_token()
+    if token_info is None:
+        print("token: MISSING (set $SLACK_BOT_TOKEN or run `channels bridge set-token`)")
+    else:
+        print(f"token: set ({token_info[1]})")
+    stats = bridge.outbox_stats()
+    print(f"queued: {stats['pending']}  in-flight: {stats['in_flight']}")
+    if stats["last_error"]:
+        print(f"last error: {stats['last_error']}")
+    return 0
+
+
 def cmd_bridge_flush(args: argparse.Namespace) -> int:
+    if args.follow:
+        return bridge.flush_follow(interval=args.interval, quiet=args.quiet)
     return bridge.flush(quiet=args.quiet)
 
 
@@ -733,11 +748,29 @@ def build_parser() -> argparse.ArgumentParser:
     b_ls = bsub.add_parser("list", help="list Slack mirrors and token status")
     b_ls.set_defaults(func=cmd_bridge_list)
 
+    b_status = bsub.add_parser(
+        "status", help="show delivery-queue depth and the last error"
+    )
+    b_status.set_defaults(func=cmd_bridge_status)
+
     b_tok = bsub.add_parser("set-token", help="store the bot token in the OS keychain")
     b_tok.set_defaults(func=cmd_bridge_set_token)
 
-    b_flush = bsub.add_parser("flush", help="drain queued messages to Slack now")
+    b_flush = bsub.add_parser(
+        "flush", help="drain queued messages to Slack now (or --follow to sweep)"
+    )
     b_flush.add_argument("--quiet", action="store_true", help="suppress stderr notices")
+    b_flush.add_argument(
+        "--follow",
+        action="store_true",
+        help="keep draining on an interval until interrupted (a persistent sweeper)",
+    )
+    b_flush.add_argument(
+        "--interval",
+        type=float,
+        default=15.0,
+        help="seconds between drains when --follow is set (default 15, min 1)",
+    )
     b_flush.set_defaults(func=cmd_bridge_flush)
 
     return p

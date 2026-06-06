@@ -216,8 +216,9 @@ Slack outage never blocks an agent.
 channels bridge add <channel> <slack-channel-id> [--label <text>]
 channels bridge remove <channel>
 channels bridge list
+channels bridge status
 channels bridge set-token
-channels bridge flush [--quiet]
+channels bridge flush [--quiet] [--follow [--interval <seconds>]]
 ```
 
 Setup:
@@ -252,12 +253,60 @@ The Slack message looks like:
 refresh-token cleanup is done
 ```
 
+Check delivery health any time:
+
+```
+channels bridge status
+```
+
+prints the resolvable token source, the queue depth (`queued` waiting +
+`in-flight` being delivered), and the most recent `worker.log` error — so a
+stuck bridge (bad token, bot not in channel) is visible without grepping files.
+
+Delivery is **post-driven** by default: each post spawns a short-lived worker
+that drains the queue. If posting stops while messages are still queued (Slack
+was down, an agent finished its run), nothing retries them until the next post.
+For unattended or long-quiet setups, run a **sweeper** that keeps draining on
+its own:
+
+```
+channels bridge flush --follow            # foreground, Ctrl-C to stop
+channels bridge flush --follow --interval 30
+```
+
+To keep one running persistently, supervise it. On macOS with `launchd`
+(`~/Library/LaunchAgents/com.agent-channels.bridge.plist`, then
+`launchctl load` it):
+
+```xml
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.agent-channels.bridge</string>
+  <key>ProgramArguments</key>
+  <array><string>channels</string><string>bridge</string><string>flush</string><string>--follow</string></array>
+  <key>EnvironmentVariables</key><dict><key>SLACK_BOT_TOKEN</key><string>xoxb-...</string></dict>
+  <key>KeepAlive</key><true/>
+</dict></plist>
+```
+
+On Linux, a systemd user service (`Restart=always`) or simply
+`nohup channels bridge flush --follow &` works. The simplest coarse option,
+if you don't want a daemon, is a cron one-shot:
+
+```
+*/5 * * * * SLACK_BOT_TOKEN=xoxb-... channels bridge flush --quiet
+```
+
+Running multiple sweepers (or a sweeper alongside post-driven workers) is safe:
+a process-wide flock means only one drains at a time; the rest exit immediately.
+
 Notes:
 - One-way only: replies in Slack are not read back.
 - Only messages posted after `bridge add` are mirrored (no backfill).
 - Undelivered messages are retained under `~/.agent-channels/outbox/` and
-  retried on the next post; delivery errors are logged to `outbox/worker.log`.
+  retried on the next post (or by a `--follow` sweeper); delivery errors are
+  logged to `outbox/worker.log` and summarized by `bridge status`.
 - Delivery is at-least-once (a crash mid-delivery can re-send).
+- Malformed/corrupt queue files are dropped (and logged), never retried.
 
 ## Channel Names
 

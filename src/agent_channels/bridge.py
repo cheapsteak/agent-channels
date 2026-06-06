@@ -11,6 +11,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys as _sys
 import time
@@ -428,6 +429,69 @@ def _drain(od: Path, quiet: bool) -> int:
                     _log_error(f"{job.name}: could not release claim back to .json")
 
     return 1 if remaining else 0
+
+
+def outbox_stats() -> dict:
+    """Snapshot of delivery-queue health for `bridge status`.
+
+    pending  = jobs waiting to be delivered (*.json)
+    in_flight = jobs currently claimed by a worker (*.sending)
+    last_error = the most recent line of worker.log, if any
+    """
+    od = outbox_dir()
+    pending = 0
+    in_flight = 0
+    if od.exists():
+        pending = sum(1 for _ in od.glob("*.json"))
+        in_flight = sum(1 for _ in od.glob("*" + SENDING_SUFFIX))
+    last_error: Optional[str] = None
+    try:
+        lines = [
+            ln for ln in worker_log_path().read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        ]
+        last_error = lines[-1] if lines else None
+    except OSError:
+        last_error = None
+    return {"pending": pending, "in_flight": in_flight, "last_error": last_error}
+
+
+def flush_follow(
+    interval: float = 15.0,
+    quiet: bool = True,
+    stop_event=None,
+) -> int:
+    """Drain the outbox repeatedly until interrupted — the opt-in sweeper.
+
+    Unlike a post-spawned one-shot worker, this keeps retrying queued messages
+    even when no new posts arrive, so a transient Slack outage recovers on its
+    own. Stops on SIGINT (or stop_event, used by tests). The singleton flock in
+    flush() keeps this from racing a post-spawned worker.
+    """
+    interval = max(1.0, interval)
+    stop = {"v": False}
+
+    def _sigint(_signum, _frame):
+        stop["v"] = True
+
+    try:
+        signal.signal(signal.SIGINT, _sigint)
+    except ValueError:
+        pass  # not on the main thread (e.g. under test) — rely on stop_event
+
+    def _stopped() -> bool:
+        return stop["v"] or (stop_event is not None and stop_event.is_set())
+
+    while not _stopped():
+        try:
+            flush(quiet=quiet)
+        except Exception as exc:  # noqa: BLE001 - a daemon must never die on one pass
+            _log_error(f"flush --follow: unexpected error: {exc!r}")
+        slept = 0.0
+        while not _stopped() and slept < interval:
+            time.sleep(min(0.1, interval - slept))
+            slept += 0.1
+    return 0
 
 
 # ---------- detached worker spawn ----------

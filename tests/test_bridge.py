@@ -298,6 +298,41 @@ class FlushTests(BridgeTestCase):
             _fcntl.flock(held, _fcntl.LOCK_UN)
             os.close(held)
 
+    def test_outbox_stats_reports_depth_and_last_error(self):
+        s0 = bridge.outbox_stats()
+        self.assertEqual(s0["pending"], 0)
+        self.assertEqual(s0["in_flight"], 0)
+        self.assertIsNone(s0["last_error"])
+        bridge.enqueue("help", "C0123", {"seq": 1, "from": "a", "body": "x", "ts": "t"})
+        bridge.enqueue("help", "C0123", {"seq": 2, "from": "a", "body": "y", "ts": "t"})
+        bridge._log_error("boom happened")
+        s1 = bridge.outbox_stats()
+        self.assertEqual(s1["pending"], 2)
+        self.assertIn("boom happened", s1["last_error"])
+
+    def test_flush_follow_drains_then_stops(self):
+        import threading
+
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        self._enqueue_one()
+        stop = threading.Event()
+        with stub_slack("ok") as (server, base):
+            os.environ["SLACK_API_BASE"] = base
+            t = threading.Thread(
+                target=lambda: bridge.flush_follow(
+                    interval=0.1, quiet=True, stop_event=stop
+                )
+            )
+            t.start()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not server.requests:
+                time.sleep(0.05)
+            stop.set()
+            t.join(timeout=5)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(len(server.requests), 1)
+        self.assertEqual(list(bridge.outbox_dir().glob("*.json")), [])
+
 
 class SpawnTests(BridgeTestCase):
     def test_no_spawn_env_is_noop(self):
@@ -411,6 +446,14 @@ class BridgeCliTests(BridgeTestCase):
     def test_add_canonicalizes_channel_name(self):
         self._run(["bridge", "add", "#Help", "C0123"])
         self.assertIsNotNone(bridge.get_bridge("help"))
+
+    def test_status_reports_queue_depth(self):
+        os.environ["SLACK_BOT_TOKEN"] = "xoxb"
+        bridge.enqueue("help", "C0123", {"seq": 1, "from": "a", "body": "x", "ts": "t"})
+        rc, out = self._run(["bridge", "status"])
+        self.assertEqual(rc, 0)
+        self.assertIn("set (env)", out)
+        self.assertIn("queued: 1", out)
 
 
 if __name__ == "__main__":
